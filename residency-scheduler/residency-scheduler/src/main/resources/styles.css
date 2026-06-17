@@ -1,0 +1,172 @@
+/* ── Base ─────────────────────────────────────────────────── */
+.root {
+    -fx-font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -fx-font-size: 12px;
+    -fx-background-color: #f4f6fb;
+}
+
+/* ── Tab Pane ────────────────────────────────────────────── */
+.tab-pane .tab-header-area .tab-header-background {
+    -fx-background-color: #1e3c72;
+}
+
+.tab-pane .tab {
+    -fx-background-color: #1e3c72;
+    -fx-padding: 6 18;
+}
+
+.tab-pane .tab .tab-label {
+    -fx-text-fill: #aac4ff;
+    -fx-font-size: 12px;
+}
+
+.tab-pane .tab:selected {
+    -fx-background-color: #2a5298;
+}
+
+.tab-pane .tab:selected .tab-label {
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+
+.tab-pane .tab:hover .tab-label {
+    -fx-text-fill: white;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────── */
+.toolbar {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #dde3f0;
+    -fx-border-width: 0 0 1 0;
+    -fx-padding: 8 12;
+}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.button {
+    -fx-background-color: #2a5298;
+    -fx-text-fill: white;
+    -fx-background-radius: 4;
+    -fx-padding: 5 14;
+    -fx-cursor: hand;
+    -fx-font-size: 11px;
+}
+
+.button:hover {
+    -fx-background-color: #1e3c72;
+}
+
+.button:pressed {
+    -fx-background-color: #163060;
+}
+
+/* ── Form Panel ──────────────────────────────────────────── */
+.form-panel {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #dde3f0;
+    -fx-border-width: 0 0 0 1;
+    -fx-padding: 10;
+}
+
+/* ── TableView ───────────────────────────────────────────── */
+.table-view {
+    -fx-background-color: white;
+    -fx-border-color: #dde3f0;
+}
+
+.table-view .column-header {
+    -fx-background-color: #e8ecf8;
+    -fx-padding: 6 10;
+}
+
+.table-view .column-header .label {
+    -fx-font-weight: bold;
+    -fx-text-fill: #1e3c72;
+    -fx-font-size: 11px;
+}
+
+.table-row-cell:odd {
+    -fx-background-color: #f8faff;
+}
+
+.table-row-cell:even {
+    -fx-background-color: white;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: #c8d8f8;
+}
+
+.table-row-cell:selected .text {
+    -fx-fill: #1e3c72;
+}
+
+/* ── Labels ──────────────────────────────────────────────── */
+.label {
+    -fx-text-fill: #2d3a5a;
+}
+
+/* ── Scroll pane ─────────────────────────────────────────── */
+.scroll-pane {
+    -fx-background-color: #f4f6fb;
+    -fx-border-color: transparent;
+}
+
+.scroll-pane > .viewport {
+    -fx-background-color: #f4f6fb;
+}
+
+/* ── Titled Pane ─────────────────────────────────────────── */
+.titled-pane > .title {
+    -fx-background-color: #e8ecf8;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1e3c72;
+    -fx-padding: 6 10;
+}
+
+.titled-pane > .title > .arrow-button .arrow {
+    -fx-background-color: #1e3c72;
+}
+
+/* ── ComboBox ────────────────────────────────────────────── */
+.combo-box {
+    -fx-background-color: white;
+    -fx-border-color: #c0cbdf;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+}
+
+.combo-box:focused {
+    -fx-border-color: #2a5298;
+}
+
+/* ── Spinner / TextField ─────────────────────────────────── */
+.text-field, .text-area {
+    -fx-background-color: white;
+    -fx-border-color: #c0cbdf;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+    -fx-padding: 4 8;
+}
+
+.text-field:focused, .text-area:focused {
+    -fx-border-color: #2a5298;
+}
+
+/* ── Separator ───────────────────────────────────────────── */
+.separator .line {
+    -fx-border-color: #dde3f0;
+}
+
+/* ── Alert dialogs ───────────────────────────────────────── */
+.dialog-pane {
+    -fx-background-color: white;
+}
+
+.dialog-pane .header-panel {
+    -fx-background-color: #1e3c72;
+}
+
+.dialog-pane .header-panel .label {
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}

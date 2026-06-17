@@ -1,0 +1,181 @@
+package com.residency.cpsat;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Central configuration for the CP-SAT scheduler.
+ * All temporal values are in BLOCKS (1 block = 2 calendar weeks).
+ * A full academic year = 26 blocks (blocks 0–25).
+ */
+public class ScheduleConfig {
+
+    // ── Objective weights ──────────────────────────────────────────────────
+    private int weightUndercoverage = 100;
+    private int weightOvercoverage  = 20;
+    private int weightVariance      = 10;
+    private int weightPgyImbalance  = 15;
+    /** Penalty per block that violates the 2-inpatient / 1-outpatient cycle (block-scale 4+2). */
+    private int weightFourPlusTwo   = 30;
+    private int weightInpatientSplit = 50;
+    private int weightPostCallHard = 10000;
+    private int weightPostCallSoft = 300;
+
+    // ── Global staffing caps (in blocks) ──────────────────────────────────
+    private int globalMaxWorkloadBlocks = 24;
+    private int globalMinWorkloadBlocks = 0;
+
+    // ── Solver tuning ──────────────────────────────────────────────────────
+    private int cpSatTimeLimitSeconds = 0;
+    private int cpSatNumWorkers = 4;
+    private boolean cpSatLogSearch = true;
+
+    // ── Schedule structure ─────────────────────────────────────────────────
+    private int totalBlocks = 26;
+
+    // ── Post-call incompatibility sets ────────────────────────────────────
+    private Set<Integer> postCallTriggerRotationIds = new HashSet<>();
+    private Set<Integer> mandatoryAttendanceRotationIds = new HashSet<>();
+    private Set<Integer> discouragedAfterTriggerIds = new HashSet<>();
+
+    // ── Per-rotation overrides ─────────────────────────────────────────────
+    private Map<Integer, RotationPolicy> rotationPolicies = new HashMap<>();
+
+    // ── Linked rotation sum constraints ───────────────────────────────────
+    private List<RotationLinkRule> rotationLinkRules = new ArrayList<>();
+
+    public ScheduleConfig() {}
+
+    /**
+     * Enforces: for each resident, sum of blocks assigned to rotAId + rotBId = sumPerResident.
+     * Optionally also enforces: total blocks of rotBId across all residents = globalTotalForRotB
+     * (set to 0 to skip the global total constraint).
+     */
+    public static class RotationLinkRule {
+        public int id;
+        public int rotAId;
+        public int rotBId;
+        public int sumPerResident;
+        public int globalTotalForRotB; // 0 = no global constraint
+
+        public RotationLinkRule() {}
+        public RotationLinkRule(int rotAId, int rotBId, int sumPerResident, int globalTotalForRotB) {
+            this.rotAId = rotAId;
+            this.rotBId = rotBId;
+            this.sumPerResident = sumPerResident;
+            this.globalTotalForRotB = globalTotalForRotB;
+        }
+    }
+
+    // ── Inner class: per-rotation policy ──────────────────────────────────
+    public static class RotationPolicy {
+        public int rotationId;
+        /** Allowed segment lengths in blocks (e.g. {2} for a 4-week rotation, {1} for a 2-week half-block). */
+        public int[] allowedBlockLengths = {2};
+        public boolean requiresConsecutive = false;
+        public boolean optionalFullYearCoverage = false;
+        public int minPerBlock = 0;
+        public int maxPerBlock = 5;
+        public Map<Integer, int[]> pgyMinMax = new HashMap<>(); // pgy -> [min, max] per block
+
+        /** Prevent a 1-block segment immediately followed by another 1-block segment of the same rotation. */
+        public boolean noBackToBackHalfBlocks = false;
+
+        /** Require at least one block of a different rotation between any two segments on this rotation. */
+        public boolean requireBreakBetweenSegments = false;
+
+        /**
+         * Maximum number of consecutive blocks a resident may spend on this rotation.
+         * 0 = no limit.
+         * Example: VA = 2 (max 2 contiguous blocks = 4 calendar weeks), ICU = 2.
+         */
+        public int maxConsecutiveBlocks = 0;
+
+        /**
+         * IDs of other rotations that must not be immediately adjacent to this rotation in
+         * either direction (e.g. UPH Cardiology ↔ TIC Cardiology).
+         */
+        public List<Integer> mutuallyNonAdjacentWith = new ArrayList<>();
+
+        /**
+         * Earliest block index (0-based) at which a resident may start this rotation.
+         * 0 = no restriction (default). E.g. 2 = not allowed in blocks 0 or 1 (first 4 calendar weeks).
+         */
+        public int earliestStartBlock = 0;
+
+        /**
+         * When true, every segment of this rotation must start on an even-numbered block
+         * (0, 2, 4, … = 1A, 2A, 3A, …). Odd-block starts (1B, 2B, …) are forbidden.
+         */
+        public boolean requireEvenBlockStart = false;
+
+        public RotationPolicy() {}
+        public RotationPolicy(int rotationId) { this.rotationId = rotationId; }
+    }
+
+    // ── Getters / Setters ──────────────────────────────────────────────────
+    public int getWeightUndercoverage()              { return weightUndercoverage; }
+    public void setWeightUndercoverage(int v)        { this.weightUndercoverage = v; }
+
+    public int getWeightOvercoverage()               { return weightOvercoverage; }
+    public void setWeightOvercoverage(int v)         { this.weightOvercoverage = v; }
+
+    public int getWeightVariance()                   { return weightVariance; }
+    public void setWeightVariance(int v)             { this.weightVariance = v; }
+
+    public int getWeightPgyImbalance()               { return weightPgyImbalance; }
+    public void setWeightPgyImbalance(int v)         { this.weightPgyImbalance = v; }
+
+    public int getWeightFourPlusTwo()                { return weightFourPlusTwo; }
+    public void setWeightFourPlusTwo(int v)          { this.weightFourPlusTwo = v; }
+
+    public int getWeightInpatientSplit()             { return weightInpatientSplit; }
+    public void setWeightInpatientSplit(int v)       { this.weightInpatientSplit = v; }
+
+    public int getWeightPostCallHard()               { return weightPostCallHard; }
+    public void setWeightPostCallHard(int v)         { this.weightPostCallHard = v; }
+
+    public int getWeightPostCallSoft()               { return weightPostCallSoft; }
+    public void setWeightPostCallSoft(int v)         { this.weightPostCallSoft = v; }
+
+    public Set<Integer> getPostCallTriggerRotationIds()        { return postCallTriggerRotationIds; }
+    public void setPostCallTriggerRotationIds(Set<Integer> v)  { this.postCallTriggerRotationIds = v; }
+
+    public Set<Integer> getMandatoryAttendanceRotationIds()        { return mandatoryAttendanceRotationIds; }
+    public void setMandatoryAttendanceRotationIds(Set<Integer> v)  { this.mandatoryAttendanceRotationIds = v; }
+
+    public Set<Integer> getDiscouragedAfterTriggerIds()        { return discouragedAfterTriggerIds; }
+    public void setDiscouragedAfterTriggerIds(Set<Integer> v)  { this.discouragedAfterTriggerIds = v; }
+
+    public int getGlobalMaxWorkloadBlocks()           { return globalMaxWorkloadBlocks; }
+    public void setGlobalMaxWorkloadBlocks(int v)     { this.globalMaxWorkloadBlocks = v; }
+
+    public int getGlobalMinWorkloadBlocks()           { return globalMinWorkloadBlocks; }
+    public void setGlobalMinWorkloadBlocks(int v)     { this.globalMinWorkloadBlocks = v; }
+
+    public int getCpSatTimeLimitSeconds()            { return cpSatTimeLimitSeconds; }
+    public void setCpSatTimeLimitSeconds(int v)      { this.cpSatTimeLimitSeconds = v; }
+
+    public int getCpSatNumWorkers()                  { return cpSatNumWorkers; }
+    public void setCpSatNumWorkers(int v)            { this.cpSatNumWorkers = v; }
+
+    public boolean isCpSatLogSearch()                { return cpSatLogSearch; }
+    public void setCpSatLogSearch(boolean v)         { this.cpSatLogSearch = v; }
+
+    public int getTotalBlocks()                      { return totalBlocks; }
+    public void setTotalBlocks(int v)                { this.totalBlocks = v; }
+
+    public Map<Integer, RotationPolicy> getRotationPolicies() { return rotationPolicies; }
+    public void setRotationPolicies(Map<Integer, RotationPolicy> v) { this.rotationPolicies = v; }
+
+    public List<RotationLinkRule> getRotationLinkRules() { return rotationLinkRules; }
+    public void setRotationLinkRules(List<RotationLinkRule> v) { this.rotationLinkRules = v; }
+
+    public RotationPolicy getPolicyFor(int rotationId) {
+        return rotationPolicies.computeIfAbsent(rotationId, RotationPolicy::new);
+    }
+}

@@ -1,0 +1,54 @@
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by org.fusesource.jansi.internal.JansiLoader in an unnamed module (file:/C:/Users/Jarrett/apache-maven-3.9.6/lib/jansi-2.4.0.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.google.common.util.concurrent.AbstractFuture$UnsafeAtomicHelper (file:/C:/Users/Jarrett/apache-maven-3.9.6/lib/guava-32.0.1-jre.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.common.util.concurrent.AbstractFuture$UnsafeAtomicHelper
+WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] -----------------< com.residency:residency-scheduler >------------------
+[INFO] Building residency-scheduler 1.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] >>> javafx:0.0.8:run (default-cli) > process-classes @ residency-scheduler >>>
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ residency-scheduler ---
+[WARNING] Using platform encoding (UTF-8 actually) to copy filtered resources, i.e. build is platform dependent!
+[INFO] Copying 1 resource from src\main\resources to target\classes
+[INFO] 
+[INFO] --- compiler:3.11.0:compile (default-compile) @ residency-scheduler ---
+[INFO] Nothing to compile - all classes are up to date
+[INFO] 
+[INFO] <<< javafx:0.0.8:run (default-cli) < process-classes @ residency-scheduler <<<
+[INFO] 
+[INFO] 
+[INFO] --- javafx:0.0.8:run (default-cli) @ residency-scheduler ---
+[WARNING] There are 3 pathException(s). The related dependencies will be ignored.
+[WARNING] Dependency: C:\Users\Jarrett\.m2\repository\com\google\ortools\ortools-linux-x86-64\9.9.3963\ortools-linux-x86-64-9.9.3963.jar
+   - exception: Unable to derive module descriptor for C:\Users\Jarrett\.m2\repository\com\google\ortools\ortools-linux-x86-64\9.9.3963\ortools-linux-x86-64-9.9.3963.jar
+   - cause: ortools.linux.x86.64: Invalid module name: '64' is not a Java identifier
+[WARNING] Dependency: C:\Users\Jarrett\.m2\repository\com\google\ortools\ortools-win32-x86-64\9.9.3963\ortools-win32-x86-64-9.9.3963.jar
+   - exception: Unable to derive module descriptor for C:\Users\Jarrett\.m2\repository\com\google\ortools\ortools-win32-x86-64\9.9.3963\ortools-win32-x86-64-9.9.3963.jar
+   - cause: ortools.win32.x86.64: Invalid module name: '64' is not a Java identifier
+[WARNING] Dependency: C:\Users\Jarrett\.m2\repository\com\google\ortools\ortools-darwin-x86-64\9.9.3963\ortools-darwin-x86-64-9.9.3963.jar
+   - exception: Unable to derive module descriptor for C:\Users\Jarrett\.m2\repository\com\google\ortools\ortools-darwin-x86-64\9.9.3963\ortools-darwin-x86-64-9.9.3963.jar
+   - cause: ortools.darwin.x86.64: Invalid module name: '64' is not a Java identifier
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by com.sun.glass.utils.NativeLibLoader in module javafx.graphics (file:/C:/Users/Jarrett/.m2/repository/org/openjfx/javafx-graphics/21.0.2/javafx-graphics-21.0.2-win.jar)
+WARNING: Use --enable-native-access=javafx.graphics to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by org.sqlite.SQLiteJDBCLoader in an unnamed module (file:/C:/Users/Jarrett/.m2/repository/org/xerial/sqlite-jdbc/3.45.1.0/sqlite-jdbc-3.45.1.0.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::allocateMemory has been called by com.sun.marlin.OffHeapArray (file:/C:/Users/Jarrett/.m2/repository/org/openjfx/javafx-graphics/21.0.2/javafx-graphics-21.0.2-win.jar)
+WARNING: Please consider reporting this to the maintainers of class com.sun.marlin.OffHeapArray
+WARNING: sun.misc.Unsafe::allocateMemory will be removed in a future release
+^C
