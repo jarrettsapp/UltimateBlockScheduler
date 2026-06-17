@@ -1,6 +1,18 @@
-# Residency Rotation Scheduler
+# UltimateBlockScheduler
 
 A JavaFX desktop application for medical residency programs. Given a set of residents, rotations, and scheduling rules, it automatically generates a one-year block schedule using constraint programming — then lets users view, edit, and export the result.
+
+**Repository:** [github.com/jarrettsapp/UltimateBlockScheduler](https://github.com/jarrettsapp/UltimateBlockScheduler)
+
+## Quick Start
+
+```bash
+git clone https://github.com/jarrettsapp/UltimateBlockScheduler.git
+cd UltimateBlockScheduler/residency-scheduler/residency-scheduler
+mvn javafx:run
+```
+
+The SQLite database is created automatically on first launch.
 
 ---
 
@@ -39,9 +51,9 @@ Key dependencies (managed by Maven):
 
 ## Build & Run
 
-```bash
-cd residency-scheduler
+From the `residency-scheduler/residency-scheduler/` directory:
 
+```bash
 # Run directly with Maven
 mvn javafx:run
 
@@ -51,6 +63,17 @@ java -jar target/residency-scheduler-1.0-SNAPSHOT.jar
 ```
 
 The SQLite database (`residency_scheduler.db`) is created automatically on first launch.
+
+---
+
+## Contributing
+
+1. **Fork** the repository on GitHub
+2. **Create a feature branch** (`git checkout -b feature/your-feature`)
+3. **Commit changes** with clear messages
+4. **Push** to your fork and **open a Pull Request**
+
+For major changes, please open an issue first to discuss your proposal.
 
 ---
 
