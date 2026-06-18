@@ -44,6 +44,9 @@ import java.util.stream.Collectors;
  */
 public class CpSatSchedulerEngine {
 
+    private static final java.util.logging.Logger LOG =
+        java.util.logging.Logger.getLogger(CpSatSchedulerEngine.class.getName());
+
     private static boolean nativeLoaded    = false;
     private static String  nativeLoadError = null;
 
@@ -347,7 +350,8 @@ public class CpSatSchedulerEngine {
             p1 = new PhaseResult(status1, solver1, mc1.varFactory(), p0.hints(), Integer.MAX_VALUE);
             onProgress.accept("Phase 1 timeout — no improvement. Using Phase 0 result for Phase 2.");
         } else if (status1 == CpSolverStatus.FEASIBLE || status1 == CpSolverStatus.OPTIMAL) {
-            try { bestTier1 = (int) solver1.value(tier1Var); } catch (Exception ignored) {}
+            try { bestTier1 = (int) solver1.value(tier1Var); }
+            catch (Exception e) { LOG.log(java.util.logging.Level.WARNING, "Could not read Tier-1 objective value", e); }
             Map<String, Long> h1 = extractHints(solver1, mc1.varFactory(), residents, rotations, totalBlocks);
             p1 = new PhaseResult(status1, solver1, mc1.varFactory(), h1, bestTier1);
             onProgress.accept(String.format("Phase 1 ✓ [%s]  Tier-1 score: %d  |  Phase 2 ▶ Quality (limit: %ds)…",
@@ -387,7 +391,8 @@ public class CpSatSchedulerEngine {
         long bestTier2 = Long.MAX_VALUE;
         PhaseResult p2;
         if (status2 == CpSolverStatus.FEASIBLE || status2 == CpSolverStatus.OPTIMAL) {
-            try { bestTier2 = (long) solver2.value(tier2CostVar); } catch (Exception ignored) {}
+            try { bestTier2 = (long) solver2.value(tier2CostVar); }
+            catch (Exception e) { LOG.log(java.util.logging.Level.WARNING, "Could not read Tier-2 objective value", e); }
             Map<String, Long> h2 = extractHints(solver2, mc2.varFactory(), residents, rotations, totalBlocks);
             p2 = new PhaseResult(status2, solver2, mc2.varFactory(), h2, bestTier1);
             onProgress.accept(String.format("Phase 2 ✓ [%s]  Tier-2 cost: %d  |  Phase 3 ▶ Pattern (limit: %ds)…",
@@ -539,6 +544,9 @@ public class CpSatSchedulerEngine {
     private Map<String, Long> extractHints(CpSolver solver, VariableFactory varFactory,
             List<Resident> residents, List<Rotation> rotations, int totalBlocks) {
         Map<String, Long> hints = new HashMap<>();
+        // Per-variable reads can legitimately fail (e.g. a var not in this phase's
+        // model); those are counted and reported once rather than logged per element.
+        int[] failures = {0};
         try {
             for (Resident r : residents) {
                 for (Rotation s : rotations) {
@@ -546,16 +554,20 @@ public class CpSatSchedulerEngine {
                         BoolVar occ = varFactory.getOccupancyVar(r.getId(), s.getId(), w);
                         if (occ != null) {
                             try { hints.put(occ.getName(), solver.booleanValue(occ) ? 1L : 0L); }
-                            catch (Exception ignored) {}
+                            catch (Exception e) { failures[0]++; }
                         }
                     }
                     varFactory.getStartVars(r.getId(), s.getId()).forEach((week, sv) -> {
                         try { hints.put(sv.getName(), solver.booleanValue(sv) ? 1L : 0L); }
-                        catch (Exception ignored) {}
+                        catch (Exception e) { failures[0]++; }
                     });
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING, "Hint extraction aborted early", e);
+        }
+        if (failures[0] > 0)
+            LOG.warning("Hint extraction: " + failures[0] + " variable reads failed (warm-start may be partial).");
         return hints;
     }
 
@@ -615,8 +627,12 @@ public class CpSatSchedulerEngine {
             default         -> sol.setStatus(ScheduleSolution.Status.UNKNOWN);
         }
 
-        try { sol.setObjectiveValue(solver.objectiveValue()); } catch (Exception ignored) {}
+        try { sol.setObjectiveValue(solver.objectiveValue()); }
+        catch (Exception e) { LOG.log(java.util.logging.Level.WARNING, "Could not read objective value", e); }
 
+        // Per-variable reads can fail individually; a non-zero count means some
+        // assignments were dropped from the committed schedule, so report it.
+        int failures = 0;
         try {
             for (Resident r : residents) {
                 for (Rotation s : rotations) {
@@ -625,11 +641,15 @@ public class CpSatSchedulerEngine {
                         try {
                             if (occ != null && solver.booleanValue(occ))
                                 sol.recordAssignment(r.getId(), s.getId(), w);
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) { failures++; }
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.SEVERE, "Solution extraction aborted early — schedule may be incomplete", e);
+        }
+        if (failures > 0)
+            LOG.severe("Solution extraction: " + failures + " assignment reads failed — committed schedule may be incomplete.");
 
         bestSolution = sol;
         return sol;
