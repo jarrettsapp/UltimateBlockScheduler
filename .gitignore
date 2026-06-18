@@ -33,8 +33,11 @@ releases/
 .DS_Store
 Thumbs.db
 
-# Database
+# Database (including SQLite WAL-mode sidecar files)
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite
 *.sqlite3
 
