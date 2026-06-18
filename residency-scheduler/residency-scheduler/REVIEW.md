@@ -237,7 +237,7 @@ regression test pinning the block→slot cap would have caught H2.
 | **M1** — diagnosis order/labels drift | ✅ Resolved | Added `ConstraintStep` + `orderedConstraintSteps()`; `buildBaseModel`, the stepwise diagnosis, and the removal diagnosis now all iterate that one list, so order and labels can't diverge. Drill-downs key off the failing constraint's label, not a magic index. |
 | **M2** — default `allowed_block_lengths` | ✅ Resolved (not a bug) | Verified the round-trip: DB column is in **weeks** (`'4'` = one 4-week block), converted to slots on load. Was correct but undocumented; added a DDL comment and routed conversions through `ScheduleUnits`. |
 | **M3** — silent exception swallowing | ✅ Resolved | Added a `Logger`; objective/hint/solution-extraction failures now log (SEVERE for dropped assignments). Per-element catches are counted and reported in aggregate. |
-| **M4** — test coverage gaps | ⚠️ Partially addressed | Added `ScheduleUnitsTest` covering the highest-risk path (the unit conversion). Prerequisite/sequence-rule semantics, the phase-lock flow, and DB round-trips are **still uncovered** — recommended as follow-up work. |
+| **M4** — test coverage gaps | ✅ Resolved | Added `ScheduleUnitsTest` (unit conversion), `RuleConstraintTest` (prerequisites, MUST_BE_AFTER, CANNOT_IMMEDIATELY_FOLLOW, PGY-scoping, and the per-resident max-blocks slot cap — feasible and infeasible cases), and `RotationPolicyRoundTripTest` (weeks↔slots persistence through SQLite). Suite grew from 17 to 27 tests. The Phase 0→3 lock flow remains an integration-level gap (needs a seeded DB); noted as optional follow-up. |
 | **Low** — launch.log / magic 26 / docs / numbering | ✅ Resolved | `launch.log` removed and `*.log` git-ignored; `26` → `ScheduleUnits.SLOTS_PER_YEAR`; "Three-phase" → "Four-phase"; `ConstraintBuilder` section numbering fixed; README terminology updated. |
 | **Low** — doubly-nested directory | ⏭️ Deferred | `residency-scheduler/residency-scheduler/` left as-is for now: flattening rewrites every path in history/CI/docs and is best done as its own dedicated change. Tracked for a follow-up.
 
@@ -249,11 +249,14 @@ regression test pinning the block→slot cap would have caught H2.
 5. `Document and unify rotation_config block-length units (REVIEW.md M2)`
 6. `Log previously-swallowed solver exceptions (REVIEW.md M3)`
 7. `Hygiene cleanup (REVIEW.md low-severity items)`
+8. `Annotate REVIEW.md with resolution status and changelog`
+9. `Add rule-constraint and DAO round-trip tests (REVIEW.md M4)`
 
-All 17 tests pass and the project compiles cleanly after each commit.
+All 27 tests pass and the project compiles cleanly after each commit.
 
 ### Recommended follow-ups (not done here)
-- Broaden test coverage (M4): prerequisites, sequence/adjacency rules, the
-  Phase 0→3 lock flow, and DAO round-trips.
+- Add an integration test for the Phase 0→3 lock flow against a seeded database
+  (the remaining slice of M4; the unit-level rule/conversion/persistence tests
+  are now in place).
 - Flatten the doubly-nested project directory in a dedicated commit.
 - Consider a connection pool (HikariCP) if DB concurrency grows.
