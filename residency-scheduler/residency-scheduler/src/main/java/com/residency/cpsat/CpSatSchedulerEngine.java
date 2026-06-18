@@ -334,7 +334,7 @@ public class CpSatSchedulerEngine {
             applyHints(mc1.model(), mc1.varFactory(), residents, rotations, totalBlocks, p0.hints());
 
         ObjectiveFunctionBuilder obj1 = new ObjectiveFunctionBuilder(
-            mc1.model(), mc1.varFactory(), config, totalBlocks);
+            mc1.model(), mc1.varFactory(), config, totalBlocks, auxCoverage);
         IntVar tier1Var = obj1.buildTier1Counter(residents, rotations);
         mc1.model().minimize(tier1Var);
 
@@ -374,7 +374,7 @@ public class CpSatSchedulerEngine {
             applyHints(mc2.model(), mc2.varFactory(), residents, rotations, totalBlocks, p1.hints());
 
         ObjectiveFunctionBuilder obj2 = new ObjectiveFunctionBuilder(
-            mc2.model(), mc2.varFactory(), config, totalBlocks);
+            mc2.model(), mc2.varFactory(), config, totalBlocks, auxCoverage);
 
         if (bestTier1 < Integer.MAX_VALUE) {
             IntVar tier1Lock = obj2.buildTier1Counter(residents, rotations);
@@ -420,7 +420,7 @@ public class CpSatSchedulerEngine {
             applyHints(mc3.model(), mc3.varFactory(), residents, rotations, totalBlocks, p2.hints());
 
         ObjectiveFunctionBuilder obj3 = new ObjectiveFunctionBuilder(
-            mc3.model(), mc3.varFactory(), config, totalBlocks);
+            mc3.model(), mc3.varFactory(), config, totalBlocks, auxCoverage);
 
         if (bestTier1 < Integer.MAX_VALUE) {
             IntVar tier1Lock3 = obj3.buildTier1Counter(residents, rotations);
@@ -472,7 +472,7 @@ public class CpSatSchedulerEngine {
             if (vr.hasFailed()) onProgress.accept("⚠ Post-solve validation failures — see solver log.");
 
             // Constraint score breakdown
-            SolutionScoreReporter reporter = new SolutionScoreReporter(config, totalBlocks);
+            SolutionScoreReporter reporter = new SolutionScoreReporter(config, totalBlocks, auxCoverage);
             solverLog.append(reporter.buildReport(solution, residents, rotations));
         }
 

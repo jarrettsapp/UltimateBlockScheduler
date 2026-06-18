@@ -15,10 +15,19 @@ public class SolutionScoreReporter {
 
     private final ScheduleConfig config;
     private final int totalBlocks;
+    // Pre-counted aux coverage: rotationId -> blockIndex -> count. Credited against
+    // min/max so the report matches the aux-aware coverage objective and constraint.
+    private final Map<Integer, Map<Integer, Integer>> auxCoverage;
 
     public SolutionScoreReporter(ScheduleConfig config, int totalBlocks) {
+        this(config, totalBlocks, Map.of());
+    }
+
+    public SolutionScoreReporter(ScheduleConfig config, int totalBlocks,
+                                 Map<Integer, Map<Integer, Integer>> auxCoverage) {
         this.config      = config;
         this.totalBlocks = totalBlocks;
+        this.auxCoverage = auxCoverage;
     }
 
     public String buildReport(ScheduleSolution solution,
@@ -53,35 +62,40 @@ public class SolutionScoreReporter {
         // ── Pre-compute weighted score breakdown ──────────────────────────
         // Mirrors ObjectiveFunctionBuilder exactly so the numbers match the solver.
 
-        // α: undercoverage per rotation
+        // α: undercoverage per rotation (aux coverage credited, matching the objective)
         Map<String, long[]> underByRot = new LinkedHashMap<>(); // rotName → [rawBlocks, weightedCost]
         long totalUnder = 0;
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
             if (policy.minPerBlock <= 0) continue;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             long rawBlocks = 0;
             for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMin = Math.max(0, policy.minPerBlock - auxByBlock.getOrDefault(b, 0));
+                if (effectiveMin <= 0) continue;
                 int coverage = 0;
                 for (Resident r : residents)
                     if (assigned.get(r.getId()).getOrDefault(s.getId(), List.of()).contains(b)) coverage++;
-                rawBlocks += Math.max(0, policy.minPerBlock - coverage);
+                rawBlocks += Math.max(0, effectiveMin - coverage);
             }
             long weighted = rawBlocks * config.getWeightUndercoverage();
             if (rawBlocks > 0) underByRot.put(s.getName(), new long[]{rawBlocks, weighted});
             totalUnder += weighted;
         }
 
-        // β: overcoverage per rotation
+        // β: overcoverage per rotation (aux coverage credited, matching the objective)
         Map<String, long[]> overByRot = new LinkedHashMap<>();
         long totalOver = 0;
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             long rawBlocks = 0;
             for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMax = Math.max(0, policy.maxPerBlock - auxByBlock.getOrDefault(b, 0));
                 int coverage = 0;
                 for (Resident r : residents)
                     if (assigned.get(r.getId()).getOrDefault(s.getId(), List.of()).contains(b)) coverage++;
-                rawBlocks += Math.max(0, coverage - policy.maxPerBlock);
+                rawBlocks += Math.max(0, coverage - effectiveMax);
             }
             long weighted = rawBlocks * config.getWeightOvercoverage();
             if (rawBlocks > 0) overByRot.put(s.getName(), new long[]{rawBlocks, weighted});
@@ -275,13 +289,15 @@ public class SolutionScoreReporter {
         sb.append("\n── Tier 2: Schedule Quality ──\n");
 
         // Coverage per rotation
-        sb.append("  Coverage (min/max residents per block):\n");
+        sb.append("  Coverage (min/max residents per block, aux credited):\n");
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
-            int min = policy.minPerBlock;
-            int max = policy.maxPerBlock;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             int underCount = 0, overCount = 0;
             for (int b = 0; b < totalBlocks; b++) {
+                int aux = auxByBlock.getOrDefault(b, 0);
+                int min = Math.max(0, policy.minPerBlock - aux);
+                int max = Math.max(0, policy.maxPerBlock - aux);
                 int coverage = 0;
                 for (Resident r : residents) {
                     List<Integer> blks = assigned.get(r.getId())

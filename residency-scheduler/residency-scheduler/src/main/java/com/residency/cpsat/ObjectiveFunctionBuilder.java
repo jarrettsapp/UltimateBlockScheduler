@@ -21,16 +21,29 @@ public class ObjectiveFunctionBuilder {
     private final VariableFactory vars;
     private final ScheduleConfig config;
     private final int totalBlocks;
+    // Pre-counted auxiliary-resident coverage: rotationId -> blockIndex -> count.
+    // The coverage objective subtracts this from min/max so it matches the hard
+    // coverage constraint, which already credits aux coverage (REVIEW: the
+    // undercoverage objective previously ignored aux and penalised blocks that
+    // were fully staffed by ancillary residents).
+    private final Map<Integer, Map<Integer, Integer>> auxCoverage;
 
     private final Map<String, IntVar> undercoverageVars = new LinkedHashMap<>();
     private final Map<String, IntVar> overcoverageVars  = new LinkedHashMap<>();
 
     public ObjectiveFunctionBuilder(CpModel model, VariableFactory vars,
                                     ScheduleConfig config, int totalBlocks) {
+        this(model, vars, config, totalBlocks, Map.of());
+    }
+
+    public ObjectiveFunctionBuilder(CpModel model, VariableFactory vars,
+                                    ScheduleConfig config, int totalBlocks,
+                                    Map<Integer, Map<Integer, Integer>> auxCoverage) {
         this.model       = model;
         this.vars        = vars;
         this.config      = config;
         this.totalBlocks = totalBlocks;
+        this.auxCoverage = auxCoverage;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -157,35 +170,41 @@ public class ObjectiveFunctionBuilder {
         List<IntVar>  terms   = new ArrayList<>();
         List<Integer> weights = new ArrayList<>();
 
-        // α: Undercoverage
+        // α: Undercoverage. Credit pre-counted aux coverage the same way the hard
+        // coverage constraint does (effectiveMin = max(0, minPerBlock - auxCount)),
+        // so blocks already staffed by ancillary residents are not penalised.
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
-            int targetMin = policy.minPerBlock;
-            if (targetMin <= 0) continue;
+            if (policy.minPerBlock <= 0) continue;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMin = Math.max(0, policy.minPerBlock - auxByBlock.getOrDefault(b, 0));
+                if (effectiveMin <= 0) continue;
                 List<BoolVar> blockOccs = new ArrayList<>();
                 for (Resident r : residents) {
                     BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
                     if (occ != null) blockOccs.add(occ);
                 }
                 if (blockOccs.isEmpty()) continue;
-                IntVar under = model.newIntVar(0, targetMin,
+                IntVar under = model.newIntVar(0, effectiveMin,
                     String.format("t2_under_s%d_b%d", s.getId(), b));
                 BoolVar[] arr = blockOccs.toArray(new BoolVar[0]);
                 model.addLinearConstraint(
                     LinearExpr.newBuilder().addSum(arr).add(under),
-                    targetMin, residents.size() + targetMin);
+                    effectiveMin, residents.size() + effectiveMin);
                 undercoverageVars.put(s.getId() + "_" + b, under);
                 terms.add(under);
                 weights.add(config.getWeightUndercoverage());
             }
         }
 
-        // β: Overcoverage
+        // β: Overcoverage. Add aux coverage to the headcount so the effective max
+        // matches the hard constraint (effectiveMax = max(0, maxPerBlock - auxCount)).
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
-            int targetMax = policy.maxPerBlock;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMax = Math.max(0, policy.maxPerBlock - auxByBlock.getOrDefault(b, 0));
                 List<BoolVar> blockOccs = new ArrayList<>();
                 for (Resident r : residents) {
                     BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
@@ -197,7 +216,7 @@ public class ObjectiveFunctionBuilder {
                 BoolVar[] arr = blockOccs.toArray(new BoolVar[0]);
                 model.addLinearConstraint(
                     LinearExpr.newBuilder().addSum(arr).addTerm(over, -1),
-                    0, targetMax);
+                    0, effectiveMax);
                 overcoverageVars.put(s.getId() + "_" + b, over);
                 terms.add(over);
                 weights.add(config.getWeightOvercoverage());
