@@ -157,6 +157,9 @@ public class DatabaseManager {
             CREATE TABLE IF NOT EXISTS rotation_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 rotation_id INTEGER NOT NULL REFERENCES rotations(id) ON DELETE CASCADE UNIQUE,
+                -- allowed_block_lengths is stored in WEEKS (comma-separated). The default
+                -- '4' = one 4-week full block. ScheduleConfigDAO converts weeks <-> the
+                -- solver's 2-week slots on load/save. See ScheduleUnits / REVIEW.md M2.
                 allowed_block_lengths TEXT NOT NULL DEFAULT '4',
                 requires_consecutive INTEGER NOT NULL DEFAULT 0,
                 min_per_week INTEGER NOT NULL DEFAULT 1,

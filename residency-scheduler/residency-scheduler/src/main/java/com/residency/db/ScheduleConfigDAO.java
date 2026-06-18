@@ -1,6 +1,7 @@
 package com.residency.db;
 
 import com.residency.cpsat.ScheduleConfig;
+import com.residency.model.ScheduleUnits;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -68,9 +69,10 @@ public class ScheduleConfigDAO extends BaseDAO {
     }
 
     public void saveRotationPolicy(ScheduleConfig.RotationPolicy policy) throws SQLException {
-        // Convert block lengths back to weeks for the DB column (×2).
+        // allowedBlockLengths is held in 2-week slots in memory; the DB column is in
+        // weeks. Convert slots -> weeks for storage. See ScheduleUnits / REVIEW.md M2.
         String lengths = Arrays.stream(policy.allowedBlockLengths)
-            .mapToObj(l -> String.valueOf(l * 2)).collect(Collectors.joining(","));
+            .mapToObj(l -> String.valueOf(ScheduleUnits.slotsToWeeks(l))).collect(Collectors.joining(","));
         String sql = """
             INSERT INTO rotation_config
                 (rotation_id, allowed_block_lengths, requires_consecutive,
@@ -230,9 +232,9 @@ public class ScheduleConfigDAO extends BaseDAO {
     private ScheduleConfig.RotationPolicy mapPolicy(ResultSet rs) throws SQLException {
         ScheduleConfig.RotationPolicy p = new ScheduleConfig.RotationPolicy(rs.getInt("rotation_id"));
         String[] lengths = rs.getString("allowed_block_lengths").split(",");
-        // DB stores lengths in weeks; convert to blocks (÷2, min 1).
+        // DB stores lengths in weeks; convert to 2-week slots (min 1 slot).
         p.allowedBlockLengths = Arrays.stream(lengths)
-            .mapToInt(s -> Math.max(1, Integer.parseInt(s.trim()) / 2)).toArray();
+            .mapToInt(s -> Math.max(1, ScheduleUnits.weeksToSlots(Integer.parseInt(s.trim())))).toArray();
         p.requiresConsecutive         = rs.getInt("requires_consecutive") == 1;
         p.minPerBlock                 = rs.getInt("min_per_week");   // column still named min_per_week in DB
         p.maxPerBlock                 = rs.getInt("max_per_week");
