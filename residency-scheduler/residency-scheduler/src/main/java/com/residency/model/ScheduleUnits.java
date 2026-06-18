@@ -60,4 +60,23 @@ public final class ScheduleUnits {
     public static int slotsToWeeks(int slots) {
         return slots * WEEKS_PER_SLOT;
     }
+
+    /**
+     * Convert a per-rotation requirement expressed in 4-week clinical blocks into
+     * scheduling slots. {@code RotationRequirement.minBlocks}/{@code maxBlocks} use
+     * this unit, where 0.5 = one half-block (2 weeks = 1 slot) and 1.0 = one full
+     * block (4 weeks = 2 slots). Rounds to the nearest whole slot.
+     *
+     * <p>This replaces the historical {@code ceil(minBlocks) * minLen} formula,
+     * which under-enforced requirements wherever a rotation allowed a 2-week
+     * segment (e.g. a 2-block VA requirement enforced only 2 slots instead of 4).
+     * See REVIEW/RULES_REVIEW finding B1.
+     *
+     * @param blocks requirement in 4-week blocks (may be fractional, e.g. 0.5)
+     * @return the equivalent whole number of 2-week slots (rounded)
+     */
+    public static int blocksToSlots(double blocks) {
+        if (blocks <= 0) return 0;
+        return (int) Math.round(blocks * SLOTS_PER_FULL_BLOCK);
+    }
 }

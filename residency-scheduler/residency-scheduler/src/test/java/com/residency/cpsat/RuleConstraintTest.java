@@ -179,6 +179,54 @@ class RuleConstraintTest {
     }
 
     @Test
+    void requiredMinimum_enforcesFullSlotCount_evenWithHalfBlockSegments() {
+        // RULES_REVIEW B1: a 2-block (=4-slot) requirement on a rotation that allows
+        // 2-week (1-slot) segments must enforce 4 slots. The old ceil(minBlocks)*minLen
+        // formula enforced only 2 here (minLen=1), letting a resident be under-scheduled.
+        Fixture f = new Fixture(12, new int[]{1}); // half-block-only rotation
+        f.eligible(1, 1);
+        f.build();
+        f.rotations.get(0).setMaxBlocksAllowed(12); // generous max (6 slots), not the binding constraint
+
+        // PGY-1 requirement: 2 blocks required (= 4 slots).
+        RotationRequirement req = new RotationRequirement();
+        req.setRotationId(1); req.setPgyLevel(1);
+        req.setMinBlocks(2.0); req.setMaxBlocks(6.0); req.setRequired(true);
+        Map<Integer, Map<Integer, RotationRequirement>> reqMap =
+            Map.of(1, Map.of(1, req));
+        f.cb.applyMaxBlocksPerResidentConstraints(f.residents, f.rotations, reqMap);
+
+        // Forbid the rotation in all but 3 blocks → only 3 slots possible < required 4.
+        for (int b = 3; b < 12; b++)
+            f.model.addEquality(f.vars.getOccupancyVar(1, 1, b), 0);
+
+        assertEquals(CpSolverStatus.INFEASIBLE, f.solve(),
+            "Only 3 slots available cannot satisfy a 2-block (=4-slot) requirement");
+    }
+
+    @Test
+    void requiredMinimum_satisfiableWithEnoughSlots() {
+        Fixture f = new Fixture(12, new int[]{1});
+        f.eligible(1, 1);
+        f.build();
+        f.rotations.get(0).setMaxBlocksAllowed(12);
+
+        RotationRequirement req = new RotationRequirement();
+        req.setRotationId(1); req.setPgyLevel(1);
+        req.setMinBlocks(2.0); req.setMaxBlocks(6.0); req.setRequired(true);
+        Map<Integer, Map<Integer, RotationRequirement>> reqMap = Map.of(1, Map.of(1, req));
+        f.cb.applyMaxBlocksPerResidentConstraints(f.residents, f.rotations, reqMap);
+
+        CpSolverStatus status = f.solve();
+        assertTrue(status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE,
+            "12 free blocks easily satisfy a 4-slot requirement");
+        int slots = 0;
+        for (int b = 0; b < 12; b++)
+            if (f.solver.booleanValue(f.vars.getOccupancyVar(1, 1, b))) slots++;
+        assertTrue(slots >= 4, "Resident must be on the rotation at least 4 slots, got " + slots);
+    }
+
+    @Test
     void maxBlocksPerResident_allowsUpToConvertedSlots() {
         Fixture f = new Fixture(8, new int[]{1});
         f.eligible(1, 1);

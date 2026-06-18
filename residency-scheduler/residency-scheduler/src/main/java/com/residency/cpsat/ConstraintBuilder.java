@@ -141,9 +141,14 @@ public class ConstraintBuilder {
                 Map<Integer, RotationRequirement> byPgy = requirements.getOrDefault(s.getId(), Map.of());
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
                 if (req != null && req.isRequired()) {
-                    int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                    int minLen = Arrays.stream(lengths).min().orElse(1);
-                    minBlocks = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    // req.minBlocks is in 4-week clinical blocks (0.5 = one 2-week slot,
+                    // 1.0 = two slots). Convert directly to slots. The previous formula
+                    // ceil(minBlocks)*minLen under-enforced requirements on rotations that
+                    // allow a 2-week segment (minLen=1) — e.g. a 2-block VA requirement
+                    // enforced only 2 slots instead of 4. See RULES_REVIEW finding B1.
+                    minBlocks = ScheduleUnits.blocksToSlots(req.getMinBlocks());
+                    // Never require more than the rotation's own max.
+                    minBlocks = Math.min(minBlocks, maxBlocks);
                 }
 
                 BoolVar[] arr = occs.toArray(new BoolVar[0]);

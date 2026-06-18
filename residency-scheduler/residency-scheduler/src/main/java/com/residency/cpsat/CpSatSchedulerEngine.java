@@ -851,8 +851,7 @@ public class CpSatSchedulerEngine {
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
                 if (req != null && req.isRequired()) {
                     int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                    int minLen = Arrays.stream(lengths).min().orElse(2);
-                    int minSlots = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    int minSlots = ScheduleUnits.blocksToSlots(req.getMinBlocks());
                     minDemanded += minSlots;
                     String flag = (minSlots > maxSlots) ? " ⚠ minSlots>maxSlots CONTRADICTION" : "";
                     reqDetail.append(String.format(
@@ -1133,8 +1132,7 @@ public class CpSatSchedulerEngine {
                 for (Resident r : residents) {
                     RotationRequirement req = reqMap.getOrDefault(s.getId(), Map.of()).get(r.getPgyLevel());
                     if (req != null && req.isRequired()) {
-                        int minLen = Arrays.stream(policy.allowedBlockLengths).min().orElse(1);
-                        totalMinDemand += (int) Math.ceil(req.getMinBlocks()) * minLen;
+                        totalMinDemand += ScheduleUnits.blocksToSlots(req.getMinBlocks());
                     }
                 }
 
@@ -1252,8 +1250,7 @@ public class CpSatSchedulerEngine {
                 if (sv.solve(m) != CpSolverStatus.INFEASIBLE) reachable++;
             }
 
-            int minLen = Arrays.stream(policy.allowedBlockLengths).min().orElse(1);
-            int needed = (int) Math.ceil(req.getMinBlocks()) * minLen;
+            int needed = ScheduleUnits.blocksToSlots(req.getMinBlocks());
             if (reachable < needed) {
                 log.append(String.format(
                     "        ⚠ %-20s  reachableBlocks=%d  needed=%d  [BLOCKED]\n",
@@ -1288,9 +1285,8 @@ public class CpSatSchedulerEngine {
                 int maxSlots = Math.max(1, ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed()));
                 int minSlots = 0;
                 if (req != null && req.isRequired()) {
-                    int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                    int minLen = Arrays.stream(lengths).min().orElse(2);
-                    minSlots = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    // Mirror ConstraintBuilder.applyMaxBlocksPerResidentConstraints exactly.
+                    minSlots = Math.min(ScheduleUnits.blocksToSlots(req.getMinBlocks()), maxSlots);
                 }
                 addedPairs.add(new int[]{r.getId(), s.getId(), minSlots, maxSlots});
 
@@ -1350,9 +1346,7 @@ public class CpSatSchedulerEngine {
                     Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
                     RotationRequirement req = byPgy.get(r.getPgyLevel());
                     if (req != null && req.isRequired()) {
-                        int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                        int minLen = Arrays.stream(lengths).min().orElse(2);
-                        totalMinDemand += (int) Math.ceil(req.getMinBlocks()) * minLen;
+                        totalMinDemand += ScheduleUnits.blocksToSlots(req.getMinBlocks());
                     }
                 }
 
