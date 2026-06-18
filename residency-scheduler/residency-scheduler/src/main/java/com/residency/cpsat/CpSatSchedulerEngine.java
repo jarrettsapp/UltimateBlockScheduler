@@ -786,19 +786,22 @@ public class CpSatSchedulerEngine {
             for (Rotation s : rotations) {
                 Set<Integer> pool = eligibleByRotation.get(s.getId());
                 if (pool != null && !pool.contains(r.getId())) continue;
-                maxSchedulable += s.getMaxBlocksAllowed();
+                // All quantities here are in SLOTS (2-week units) so they compare directly
+                // against effMin/effMax, which are slot-based workload bounds. maxBlocksAllowed
+                // is entered in WEEKS, so convert. (Previously used raw weeks — see REVIEW.md H2.)
+                int maxSlots = ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed());
+                maxSchedulable += maxSlots;
                 Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
                 if (req != null && req.isRequired()) {
                     int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
                     int minLen = Arrays.stream(lengths).min().orElse(2);
-                    int minWks = (int) Math.ceil(req.getMinBlocks()) * minLen;
-                    int maxWks = s.getMaxBlocksAllowed();
-                    minDemanded += minWks;
-                    String flag = (minWks > maxWks) ? " ⚠ minWks>maxWks CONTRADICTION" : "";
+                    int minSlots = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    minDemanded += minSlots;
+                    String flag = (minSlots > maxSlots) ? " ⚠ minSlots>maxSlots CONTRADICTION" : "";
                     reqDetail.append(String.format(
-                        "    %-30s  minBlocks=%.1f  lengths=%s  minWks=%d  maxWks=%d%s\n",
-                        s.getName(), req.getMinBlocks(), Arrays.toString(lengths), minWks, maxWks, flag));
+                        "    %-30s  minBlocks=%.1f  lengths=%s  minSlots=%d  maxSlots=%d%s\n",
+                        s.getName(), req.getMinBlocks(), Arrays.toString(lengths), minSlots, maxSlots, flag));
                 }
             }
             boolean ok = maxSchedulable >= effMin && minDemanded <= effMax;
@@ -1262,14 +1265,16 @@ public class CpSatSchedulerEngine {
             for (Rotation s : rotations) {
                 Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
-                int maxWks = s.getMaxBlocksAllowed();
-                int minWks = 0;
+                // Mirror applyMaxBlocksPerResidentConstraints: bounds are in SLOTS.
+                // maxBlocksAllowed is entered in WEEKS -> convert via ScheduleUnits.
+                int maxSlots = Math.max(1, ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed()));
+                int minSlots = 0;
                 if (req != null && req.isRequired()) {
                     int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
                     int minLen = Arrays.stream(lengths).min().orElse(2);
-                    minWks = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    minSlots = (int) Math.ceil(req.getMinBlocks()) * minLen;
                 }
-                addedPairs.add(new int[]{r.getId(), s.getId(), minWks, maxWks});
+                addedPairs.add(new int[]{r.getId(), s.getId(), minSlots, maxSlots});
 
                 CpModel m = new CpModel();
                 VariableFactory vf2 = new VariableFactory(m, totalBlocks, rotationLengths);
@@ -1292,8 +1297,8 @@ public class CpSatSchedulerEngine {
                 sv.getParameters().setNumWorkers(1);
                 CpSolverStatus st = sv.solve(m);
 
-                String pairLabel = String.format("PGY-%d %-15s + %-30s [min=%d max=%d wks]",
-                    r.getPgyLevel(), r.getName(), s.getName(), minWks, maxWks);
+                String pairLabel = String.format("PGY-%d %-15s + %-30s [min=%d max=%d slots]",
+                    r.getPgyLevel(), r.getName(), s.getName(), minSlots, maxSlots);
 
                 if (st == CpSolverStatus.INFEASIBLE) {
                     log.append(String.format("    ⚠ INFEASIBLE after adding: %s\n", pairLabel));

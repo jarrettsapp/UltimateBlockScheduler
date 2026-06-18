@@ -205,9 +205,11 @@ public class TimefoldSchedulerService {
                         if (req.isRequired()) reqSet.add(rot.getId());
                         eligSet.add(rot.getId()); // has a rule = eligible
                     }
-                    // Rotation without a PGY rule still eligible with global defaults
-                    // Use rotation-level defaults as fallback
-                    maxMap.putIfAbsent(rot.getId(), Math.max(1, rot.getMaxBlocksAllowed() / 4));
+                    // Rotation without a PGY rule still eligible with global defaults.
+                    // Each planning slot here is one 2-week block, so the cap must be in
+                    // slots. maxBlocksAllowed is entered in WEEKS -> convert via ScheduleUnits.
+                    // (Previously /4, which capped at half the intended slots. See REVIEW.md H2.)
+                    maxMap.putIfAbsent(rot.getId(), Math.max(1, ScheduleUnits.weeksToSlots(rot.getMaxBlocksAllowed())));
                     eligSet.add(rot.getId()); // all rotations eligible unless restricted
                 }
                 maxBlocksByPgy.put(pgy, maxMap);

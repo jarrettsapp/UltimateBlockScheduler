@@ -5,8 +5,11 @@ public class Rotation {
     private String name;
     private String department;
     private int maxResidentsPerBlock;
-    private int minBlocksRequired;  // min blocks a resident must spend
-    private int maxBlocksAllowed;   // max blocks a resident can spend
+    // NOTE: despite the "Blocks" in these field names, both are stored in WEEKS
+    // (entered on the Rotations tab as "Min Weeks" / "Max Weeks", multiples of 2).
+    // Convert to the solver's 2-week slot grid via ScheduleUnits.weeksToSlots().
+    private int minBlocksRequired;  // min weeks a resident must spend on this rotation
+    private int maxBlocksAllowed;   // max weeks a resident can spend on this rotation
     private String description;
     private RotationType rotationType = RotationType.UNSPECIFIED;
 

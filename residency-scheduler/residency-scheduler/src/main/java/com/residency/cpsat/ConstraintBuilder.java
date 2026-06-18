@@ -133,8 +133,9 @@ public class ConstraintBuilder {
                     vars.getOccupancyVars(r.getId(), s.getId()).values());
                 if (occs.isEmpty()) continue;
 
-                // maxBlocksAllowed is stored in weeks in the Rotation model; divide by 2 for blocks.
-                int maxBlocks = Math.max(1, s.getMaxBlocksAllowed() / 2);
+                // maxBlocksAllowed is entered in WEEKS on the Rotations tab; convert to
+                // the solver's 2-week slot grid via the canonical helper. See ScheduleUnits.
+                int maxBlocks = Math.max(1, ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed()));
                 int minBlocks = 0;
 
                 Map<Integer, RotationRequirement> byPgy = requirements.getOrDefault(s.getId(), Map.of());
