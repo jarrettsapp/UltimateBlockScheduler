@@ -58,20 +58,31 @@ resident completes the rotation. Today's schedule meets the intent by luck of
 available room; a tighter year could legally short a resident to half their
 required time on VA, Outpatient GI, Ambulatory A, or Outpatient Pulmonology.
 
-### B2. The 4+2 pattern objective is inverted
-The program intent is a **4-weeks-inpatient / 2-weeks-outpatient** cadence
-(inpatient = heavier workload, spread out). `ObjectiveFunctionBuilder.buildPatternObjective`
-encodes the **opposite**: for each 3-slot (6-week) window it rewards 2 outpatient
-slots + 1 inpatient slot = 4 weeks outpatient + 2 weeks inpatient.
+### B2. The 4+2 pattern objective — NOT a bug (retracted)
+**Correction:** an earlier draft of this review claimed the 4+2 objective was
+inverted (rewarding outpatient-heavy instead of inpatient-heavy). That was a
+**misread of the code on my part.** Tracing it precisely:
 
-The Year-2 schedule is actually ~14 inpatient / ~12 outpatient slots per resident
-(correctly inpatient-leaning), because this objective is Tier-3 (weight 15, lowest
-priority, runs last) and the hard rules dominate. But the objective is pushing
-**against** the stated goal and should be flipped (or re-specified).
+- At cycle positions 0,1 (`b % 3 < 2`) the code penalizes **outpatient**
+  occupancy → encourages inpatient in 2 of 3 slots.
+- At position 2 it penalizes **inpatient** → encourages outpatient in 1 of 3.
 
-> Note: as the owner observed, a clean 4+2 is not arithmetically achievable with
-> 11 residents over 13 blocks; the intent is a *tendency*, which a soft objective
-> is the right tool for — once it points the right way.
+That is **4 weeks inpatient + 2 weeks outpatient per cycle — exactly the stated
+intent.** The objective points the right way. (Only the old code comment was
+imprecise; the logic was correct. Comments have been clarified, no logic changed.)
+
+The Year-2 schedule's ~14 inpatient / ~12 outpatient balance is consistent with
+this — the objective was helping, not fighting.
+
+**Real, lower-severity limitation (kept):** the cadence is anchored to the
+absolute block index (`b % 3`), so every resident's preferred phase is aligned
+rather than staggered. If staggering matters for call distribution, the cleaner
+encoding is a per-resident **max-consecutive-inpatient** rule ("option B" below) —
+which also directly captures "limit to ~4 weeks inpatient at a time." Deferred
+unless the real output shows too many long inpatient runs.
+
+> Note: a clean 4+2 is not arithmetically achievable with 11 residents over 13
+> blocks; the intent is a *tendency*, which a soft objective is the right tool for.
 
 ---
 
@@ -135,12 +146,18 @@ content rules beyond the length variance above.
 
 ## Suggested fix priority
 
-1. **B1** (under-enforced minimums) — real latent correctness bug; route the
-   minimum through `round(min_blocks * 2)` slots in `ConstraintBuilder` and add a
-   regression test.
-2. **B2** (inverted 4+2) — flip the pattern objective to match the
-   inpatient-heavy intent.
+1. **B1** (under-enforced minimums) — ✅ FIXED: minimum now routes through
+   `ScheduleUnits.blocksToSlots` in `ConstraintBuilder` (and the 5 diagnostic
+   copies), with regression tests.
+2. **B2** (4+2) — retracted, not a bug; comments clarified only. The block-index
+   phase-alignment limitation is deferred (see "option B" max-consecutive-inpatient).
 3. **I1 / missing-rule #1** — decide ID/Inpatient GI alignment and whether to add
    explicit continuous-coverage guarantees spanning ancillary residents.
 4. Decide how much of the **call-feasibility goal** to represent here vs. leave to
    the downstream call scheduler.
+
+> **Option B (max-consecutive-inpatient).** A soft penalty on any run of more than
+> 2 consecutive inpatient slots (4 weeks) on *any combination* of inpatient
+> rotations — distinct from the existing per-rotation `maxConsecutiveBlocks`, which
+> can't see VA→Y7Days→ICU as one long inpatient stretch. Held as a backup to the
+> 4+2 objective; add only if the real output shows too many long inpatient runs.

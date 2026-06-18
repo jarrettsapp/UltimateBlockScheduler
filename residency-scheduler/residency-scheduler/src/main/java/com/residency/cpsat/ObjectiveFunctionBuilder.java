@@ -301,9 +301,21 @@ public class ObjectiveFunctionBuilder {
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * Builds the 2+1 block pattern term (2 inpatient blocks, 1 outpatient per cycle).
-     * Returns an IntVar counting the total unweighted pattern violations.
-     * Call model.minimize() on the result (or a weighted version) in the caller.
+     * Builds the 4+2 cadence term: per 3-slot (6-week) cycle, prefer 2 INPATIENT
+     * slots (4 weeks) then 1 OUTPATIENT slot (2 weeks). Inpatient is the heavier
+     * workload the program spreads out, so the cycle is inpatient-heavy.
+     *
+     * Implementation: at cycle positions 0,1 (which "want" inpatient) every
+     * outpatient occupancy is counted as a violation; at position 2 (which "wants"
+     * outpatient) every inpatient occupancy is counted. Minimizing the count
+     * therefore pushes toward 2-inpatient / 1-outpatient per cycle. The caller
+     * minimizes this (weighted by weightFourPlusTwo).
+     *
+     * Known limitation (RULES_REVIEW): the cadence is anchored to the absolute
+     * block index (b % 3), so every resident's preferred phase is aligned rather
+     * than staggered. If staggering matters for call distribution, replace this
+     * with a per-resident max-consecutive-inpatient rule ("option B"). Kept as-is
+     * for now — this is a low-priority Tier-3 nudge and the direction is correct.
      */
     public IntVar buildPatternObjective(List<Resident> residents, List<Rotation> rotations) {
         Set<Integer> inpatientIds = rotations.stream()
@@ -321,11 +333,13 @@ public class ObjectiveFunctionBuilder {
                 for (int b = 0; b < totalBlocks; b++) {
                     int pos = b % 3;
                     if (pos < 2) {
+                        // Positions 0,1 of the cycle want INPATIENT — penalize outpatient here.
                         for (int rotId : outpatientIds) {
                             BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b);
                             if (occ != null) violations.add(occ);
                         }
                     } else {
+                        // Position 2 wants OUTPATIENT — penalize inpatient here.
                         for (int rotId : inpatientIds) {
                             BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b);
                             if (occ != null) violations.add(occ);
