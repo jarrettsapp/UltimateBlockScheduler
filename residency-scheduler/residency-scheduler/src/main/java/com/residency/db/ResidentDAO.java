@@ -70,6 +70,17 @@ public class ResidentDAO {
         return list;
     }
 
+    /** Auxiliary residents with no resident_group (the TY pool: not BMC, not categorical). */
+    public List<Resident> getAuxiliaryNonGroup() throws SQLException {
+        List<Resident> list = new ArrayList<>();
+        String sql = "SELECT * FROM residents WHERE is_auxiliary=1 AND resident_group IS NULL ORDER BY name";
+        try (Statement stmt = getConn().createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) list.add(map(rs));
+        }
+        return list;
+    }
+
     public List<Resident> getByGroup(String group) throws SQLException {
         List<Resident> list = new ArrayList<>();
         String sql = "SELECT * FROM residents WHERE resident_group=? ORDER BY name";

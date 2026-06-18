@@ -378,6 +378,117 @@ public class ObjectiveFunctionBuilder {
         return patternCost;
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    //  Tier 3 — Sunday weekend-coverage objective
+    //  Returns an IntVar = Σ shortfall below the per-weekend coverer target.
+    //  Does NOT minimize — the caller folds it into the Phase-3 objective.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Rewards having enough eligible Younker-7 Sunday-night coverers per weekend.
+     *
+     * A "weekend" sits at the boundary of half-block b → b+1 (the trailing Sat+Sun of
+     * block b belongs to block b's rotation). A resident can cover that Sunday iff:
+     *   (1) they are on a Sunday-source rotation at block b (Inpatient GI / ID / any
+     *       light rotation — heavy rotations are call-ineligible for their whole run), AND
+     *   (2) they are NOT entering a heavy rotation at block b+1 (the manually-imposed
+     *       pre-rotation rest lock: a resident starting a heavy rotation Monday cannot
+     *       burn a call shift the weekend before).
+     *
+     * The objective penalizes the SHORTFALL below {@code sundayCoverageTarget} eligible
+     * coverers, summed over all weekends. Rewarding surplus (target ≥ 2) — not merely
+     * ≥ 1 — spreads coverage across multiple residents so the downstream call scheduler
+     * can balance per-resident call-shift counts instead of overloading the lone option
+     * on single-coverer weekends. A zero-coverer weekend (a forced-volunteer Sunday)
+     * incurs the full target-sized penalty, so eliminating those is the steepest gain.
+     *
+     * Returns a zero IntVar when disabled (weight ≤ 0) or when the tier lists are unset.
+     */
+    public IntVar buildSundayCoverageObjective(List<Resident> residents) {
+        int target = config.getSundayCoverageTarget();
+        Set<Integer> heavyIds  = config.getHeavyRotationIds();
+        Set<Integer> sourceIds = config.getSundaySourceRotationIds();
+
+        IntVar shortfallTotal = model.newIntVar(0,
+            (long) Math.max(0, target) * Math.max(1, totalBlocks), "tier3_sunday_shortfall");
+
+        if (config.getWeightSundayCoverage() <= 0 || target <= 0
+                || heavyIds.isEmpty() || sourceIds.isEmpty()) {
+            model.addEquality(shortfallTotal, 0);
+            return shortfallTotal;
+        }
+
+        List<IntVar> weekendShortfalls = new ArrayList<>();
+        // Weekends are block boundaries b → b+1, for b in [0, totalBlocks-2].
+        for (int b = 0; b + 1 < totalBlocks; b++) {
+            List<BoolVar> eligible = new ArrayList<>();
+            for (Resident r : residents) {
+                // onSource[b]: resident is on a Sunday-source rotation this block.
+                List<BoolVar> sourceOccs = new ArrayList<>();
+                for (int rotId : sourceIds) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b);
+                    if (occ != null) sourceOccs.add(occ);
+                }
+                if (sourceOccs.isEmpty()) continue; // resident can't be a source here
+
+                // enteringHeavy[b+1]: resident is on a heavy rotation next block.
+                List<BoolVar> heavyNextOccs = new ArrayList<>();
+                for (int rotId : heavyIds) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b + 1);
+                    if (occ != null) heavyNextOccs.add(occ);
+                }
+
+                // elig = onSource AND NOT enteringHeavy.
+                // onSource is the sum of mutually-exclusive source occupancies (0/1).
+                // enteringHeavy is the sum of heavy occupancies next block (0/1).
+                BoolVar elig = model.newBoolVar(
+                    String.format("t3cov_elig_r%d_b%d", r.getId(), b));
+                BoolVar[] src = sourceOccs.toArray(new BoolVar[0]);
+                // elig ≤ Σ source  (can only be eligible if on a source rotation)
+                model.addLessOrEqual(elig, LinearExpr.sum(src));
+                if (!heavyNextOccs.isEmpty()) {
+                    BoolVar[] hn = heavyNextOccs.toArray(new BoolVar[0]);
+                    // elig ≤ 1 − Σ heavyNext  (not eligible if entering heavy)
+                    model.addLessOrEqual(
+                        LinearExpr.newBuilder().add(elig).addSum(hn).build(),
+                        1);
+                    // elig ≥ Σ source − Σ heavyNext  (force to 1 when on source and not entering heavy)
+                    model.addGreaterOrEqual(
+                        LinearExpr.newBuilder().add(elig)
+                            .addSum(hn)
+                            .build(),
+                        LinearExpr.sum(src));
+                } else {
+                    // No heavy-next possibility: elig == onSource.
+                    model.addGreaterOrEqual(elig, LinearExpr.sum(src));
+                }
+                eligible.add(elig);
+            }
+
+            // shortfall = max(0, target − Σ eligible)
+            IntVar shortfall = model.newIntVar(0, target,
+                String.format("t3cov_short_b%d", b));
+            if (eligible.isEmpty()) {
+                model.addEquality(shortfall, target);
+            } else {
+                BoolVar[] arr = eligible.toArray(new BoolVar[0]);
+                // shortfall ≥ target − Σ eligible   (and shortfall ≥ 0 by domain)
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(shortfall).addSum(arr).build(),
+                    target);
+            }
+            weekendShortfalls.add(shortfall);
+        }
+
+        if (weekendShortfalls.isEmpty()) {
+            model.addEquality(shortfallTotal, 0);
+        } else {
+            model.addEquality(shortfallTotal,
+                LinearExpr.sum(weekendShortfalls.toArray(new IntVar[0])));
+        }
+        return shortfallTotal;
+    }
+
     public Map<String, IntVar> getUndercoverageVars() { return undercoverageVars; }
     public Map<String, IntVar> getOvercoverageVars()  { return overcoverageVars;  }
 }

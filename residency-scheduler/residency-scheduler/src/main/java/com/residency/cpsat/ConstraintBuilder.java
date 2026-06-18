@@ -66,6 +66,43 @@ public class ConstraintBuilder {
         }
     }
 
+    // ── 1b. Categorical-only per-block caps ───────────────────────────────
+
+    /**
+     * Caps the number of CATEGORICAL residents on a rotation per block, independent of
+     * auxiliary coverage (unlike {@link #applyCoverageConstraints}, whose max is reduced
+     * by aux). Enforces hard rotation slot limits that bind categoricals specifically —
+     * e.g. ICU ≤ 1 categorical (a TY may still add a second body up to the aux-aware total
+     * cap), VA ≤ 2 categoricals. {@code residents} here are the categorical residents the
+     * solver assigns. Rotations with {@code categoricalMaxPerBlock == 0} are skipped.
+     *
+     * Younker 7 Days is special-cased: cap = 1 categorical per block EXCEPT block 13
+     * (slots 24–25), where exactly 2 categoricals supply the day team (no BMC/TY there).
+     */
+    public void applyCategoricalCapConstraints(List<Resident> residents, List<Rotation> rotations) {
+        for (Rotation s : rotations) {
+            int cap = config.getPolicyFor(s.getId()).categoricalMaxPerBlock;
+            if (cap <= 0) continue;
+            boolean isY7d = "Younker 7 Days".equalsIgnoreCase(s.getName());
+            for (int b = 0; b < totalBlocks; b++) {
+                // Younker 7 Days block 13 (slots 24,25) has no BMC/TY 2nd body, so it needs
+                // EXACTLY 2 categoricals (both the cap and the floor are 2). Elsewhere the
+                // cap is the configured value (1) with no categorical floor.
+                boolean y7dBlock13 = isY7d && (b == 24 || b == 25);
+                int slotCap = y7dBlock13 ? 2 : cap;
+                int slotMin = y7dBlock13 ? 2 : 0;
+                List<BoolVar> blockOccs = new ArrayList<>();
+                for (Resident r : residents) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
+                    if (occ != null) blockOccs.add(occ);
+                }
+                if (blockOccs.isEmpty()) continue;
+                model.addLinearConstraint(
+                    LinearExpr.sum(blockOccs.toArray(new BoolVar[0])), slotMin, slotCap);
+            }
+        }
+    }
+
     // ── 2. PGY-level block caps per rotation ──────────────────────────────
 
     public void applyPgyCapConstraints(List<Resident> residents, List<Rotation> rotations) {

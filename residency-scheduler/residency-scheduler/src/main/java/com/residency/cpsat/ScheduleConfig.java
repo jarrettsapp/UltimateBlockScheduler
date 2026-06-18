@@ -24,6 +24,18 @@ public class ScheduleConfig {
     private int weightInpatientSplit = 50;
     private int weightPostCallHard = 10000;
     private int weightPostCallSoft = 300;
+    /**
+     * Penalty per "missing" eligible Sunday-call coverer below the target, per weekend.
+     * A weekend (block boundary b→b+1) is coverable by a resident who is on a Sunday-source
+     * rotation (Inpatient GI / ID / any light) at block b AND is NOT entering a heavy
+     * rotation at block b+1 (the manually-imposed pre-rotation rest lock). The objective
+     * rewards SURPLUS coverers up to {@link #sundayCoverageTarget} so the downstream call
+     * scheduler can balance call-shift counts across residents rather than overloading the
+     * lone eligible person on single-coverer weekends. 0 = disabled (Tier-3 soft term).
+     */
+    private int weightSundayCoverage = 0;
+    /** Target number of eligible Sunday coverers per weekend; shortfall below this is penalized. */
+    private int sundayCoverageTarget = 2;
 
     // ── Global staffing caps (in blocks) ──────────────────────────────────
     private int globalMaxWorkloadBlocks = 24;
@@ -41,6 +53,16 @@ public class ScheduleConfig {
     private Set<Integer> postCallTriggerRotationIds = new HashSet<>();
     private Set<Integer> mandatoryAttendanceRotationIds = new HashSet<>();
     private Set<Integer> discouragedAfterTriggerIds = new HashSet<>();
+
+    // ── Weekend Sunday-coverage tier lists ─────────────────────────────────
+    // Authoritative workload tiers for the Sunday-coverage objective. These are kept
+    // separate from rotation_type because that flag is unreliable here (it types
+    // Inpatient GI / ID as OUTPATIENT and Younker 8 Pulm as INPATIENT). A resident on
+    // a heavy rotation is call-ineligible; entering one the next block triggers the
+    // pre-rotation rest lock. Sunday-source rotations are those a covering resident may
+    // be on (Inpatient GI / ID / any light rotation).
+    private Set<Integer> heavyRotationIds = new HashSet<>();
+    private Set<Integer> sundaySourceRotationIds = new HashSet<>();
 
     // ── Per-rotation overrides ─────────────────────────────────────────────
     private Map<Integer, RotationPolicy> rotationPolicies = new HashMap<>();
@@ -80,6 +102,14 @@ public class ScheduleConfig {
         public boolean optionalFullYearCoverage = false;
         public int minPerBlock = 0;
         public int maxPerBlock = 5;
+        /**
+         * Maximum number of CATEGORICAL residents on this rotation per block, enforced
+         * directly on categorical occupancy and independent of auxiliary coverage. 0 = no
+         * separate cap (the aux-aware {@link #maxPerBlock} total cap still applies).
+         * Use when a rotation's slot limit binds categoricals specifically — e.g. ICU = 1
+         * categorical (a TY may add a 2nd body up to the total cap), VA = 2 categoricals.
+         */
+        public int categoricalMaxPerBlock = 0;
         public Map<Integer, int[]> pgyMinMax = new HashMap<>(); // pgy -> [min, max] per block
 
         /** Prevent a 1-block segment immediately followed by another 1-block segment of the same rotation. */
@@ -141,6 +171,18 @@ public class ScheduleConfig {
 
     public int getWeightPostCallSoft()               { return weightPostCallSoft; }
     public void setWeightPostCallSoft(int v)         { this.weightPostCallSoft = v; }
+
+    public int getWeightSundayCoverage()             { return weightSundayCoverage; }
+    public void setWeightSundayCoverage(int v)       { this.weightSundayCoverage = v; }
+
+    public int getSundayCoverageTarget()             { return sundayCoverageTarget; }
+    public void setSundayCoverageTarget(int v)       { this.sundayCoverageTarget = v; }
+
+    public Set<Integer> getHeavyRotationIds()        { return heavyRotationIds; }
+    public void setHeavyRotationIds(Set<Integer> v)  { this.heavyRotationIds = v; }
+
+    public Set<Integer> getSundaySourceRotationIds()       { return sundaySourceRotationIds; }
+    public void setSundaySourceRotationIds(Set<Integer> v) { this.sundaySourceRotationIds = v; }
 
     public Set<Integer> getPostCallTriggerRotationIds()        { return postCallTriggerRotationIds; }
     public void setPostCallTriggerRotationIds(Set<Integer> v)  { this.postCallTriggerRotationIds = v; }

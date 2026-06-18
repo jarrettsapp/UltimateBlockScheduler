@@ -183,6 +183,7 @@ public class CpSatSchedulerEngine {
             Map<Integer, Rotation> rotById) {
         return List.of(
             new ConstraintStep("Coverage min/max per block",      cb -> cb.applyCoverageConstraints(residents, rotations)),
+            new ConstraintStep("Categorical-only per-block caps", cb -> cb.applyCategoricalCapConstraints(residents, rotations)),
             new ConstraintStep("PGY cap constraints",             cb -> cb.applyPgyCapConstraints(residents, rotations)),
             new ConstraintStep("Workload caps",                   cb -> cb.applyWorkloadCapConstraints(residents, rotations)),
             new ConstraintStep("Max blocks per resident",         cb -> cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap)),
@@ -272,8 +273,20 @@ public class CpSatSchedulerEngine {
         Map<String, Set<Integer>> fillerRotationsByGroup = auxFillerRotationDAO.getAllFillerRotations();
         Set<String> fillerExclusions = buildFillerExclusions(auxResidents, fillerRotationsByGroup);
         Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
-            ? Map.of()
-            : assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions);
+            ? new HashMap<>()
+            : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+
+        // Younker 7 Days coverage model (real-world rule): EXACTLY 2 bodies per block.
+        // This is NOT enforced as a solver coverage floor — doing so is infeasible, because
+        // each categorical does exactly one Y7D block (their per-resident requirement) and
+        // that supply can't also cover every block. Instead:
+        //   • Each categorical does 1 Y7D block (enforced by rotation_requirements).
+        //   • The solver caps categoricals at 1/block, except block 13 (2 categoricals).
+        //   • The BMC group statically staffs Y7D on every block EXCEPT block 7 and 13;
+        //     this is written into the schedule post-solve by AuxFillerService (so BMC
+        //     coverage is VISIBLE, not merely inferred) — see runAuxFiller / the Y7D fill.
+        //   • Block 7's 2nd body is a TY (external); block 13's is the 2nd categorical.
+        // Y7D therefore needs no solver-side per-block min; its total is capped at 2.
 
         // ── 2. Pre-solve feasibility analysis ─────────────────────────────
         onProgress.accept("Running feasibility analysis…");
@@ -430,7 +443,17 @@ public class CpSatSchedulerEngine {
         if (bestTier2 < Long.MAX_VALUE) mc3.model().addLessOrEqual(tier2Lock3, bestTier2);
 
         IntVar patternCost = obj3.buildPatternObjective(residents, rotations);
-        mc3.model().minimize(patternCost);
+        // Fold the Sunday weekend-coverage shortfall into the Phase-3 objective. Both are
+        // Tier-3 soft nudges that run with Tier-1 (clinical) and Tier-2 (coverage/variance)
+        // locked ≤ best, so this can only break ties within the already-optimal frontier —
+        // it cannot degrade clinical or coverage quality. Disabled (zero) unless
+        // weight_sunday_coverage and the heavy/source tier lists are configured.
+        IntVar sundayShortfall = obj3.buildSundayCoverageObjective(residents);
+        mc3.model().minimize(
+            LinearExpr.newBuilder()
+                .add(patternCost)
+                .addTerm(sundayShortfall, config.getWeightSundayCoverage())
+                .build());
 
         CpSolver solver3 = configureSolver(config, tier3LimitSec);
         activeSolver = solver3;

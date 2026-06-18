@@ -45,21 +45,70 @@ senior on the same rotation does *not* generate the intern auto-call.
 
 ---
 
+## Weekend eligibility model (the correct way to score coverage)
+
+**A half-block runs Monday → second Sunday; the trailing Sat+Sun belongs to that
+rotation.** Coverage must therefore be scored at the *weekend* level with
+rest-eligibility — **not** by whether a body is merely present in the block. A
+categorical intern can cover a given back-end weekend **only if**:
+
+1. they are **not on a heavy rotation** that half-block (on a heavy rotation = call-
+   ineligible for its entire duration), **and**
+2. they are **not entering a heavy rotation** the next half-block (a manually-imposed
+   pre-rotation lock — the weekend before a heavy Monday start is blanked so the intern
+   doesn't burn a call shift and then miss day one).
+
+Heavy set for both locks: **ICU, VA, Broadlawns, Younker 7 Days, Younker 7 Nights
+(NM-IMMC), Younker 8 Pulmonology.** Note NM-IMMC (Y7 Nights) is Monday–Friday nights
+only and does **not** cover Saturday/Sunday. Saturday is a rotation duty of the **Pulm
+intern** (the one exception who works despite being "heavy"), except the Broadlawns-
+resident-when-on-Pulm, who is excused.
+
+> ⚠️ An earlier version of this document reported "0 volunteer weeks" for both
+> schedules. That was an artifact of a naive *block-level presence* check and has been
+> corrected below using the eligibility model above.
+
 ## Findings
 
-### ✅ Sunday Y7 night — fully coverable, no volunteer needed
-Across all 26 half-blocks (52 weekend-weeks), **every** weekend has at least one
-intern option for Sunday call. There is **no week** that falls through to the
-volunteer system.
+### Sunday Y7 night — real schedule has 4 volunteer weekends; the app cuts it to 1
+Scoring each back-end weekend with the eligibility model (categoricals only, for an
+apples-to-apples comparison against the 11-resident real schedule):
 
-| Source (per half-block) | Block app (Year-2) | Call app (hand-built) |
+| | Real (in-use) schedule | Block app (Year-2) |
 |---|---|---|
-| Inpatient GI present (1st choice) | 11 | 22 wk |
-| ID only (backup) | 8 | 8 wk |
-| Outpatient/elective fallback only | 7 | 22 wk |
-| **No intern option (→ volunteer)** | **0** | **0** |
+| Covered by GI (1st choice) | 7 | 4 |
+| Covered by ID (backup) | 4 | 9 |
+| Covered by outpatient/elective fallback | 11 | 12 |
+| **No eligible intern (→ volunteer)** | **4** (blk 1, 13, 15, 19) | **1** (blk 24) |
 
-The Sunday priority chain is robust in both schedules. This objective is met.
+The four real-schedule failures are **total wipeouts**: at blocks 1, 13, 15, 19 **all
+11 categoricals are simultaneously rest-locked** — every one is either on a heavy
+rotation or entering one the following Monday. This is precisely the structural failure
+the block app exists to eliminate.
+
+### A soft Sunday-coverage objective drives volunteer weekends to zero
+The app's first cut (no coverage objective) already cut volunteer weekends 4 → 1
+(only block 24 remained). Adding a **soft Tier-3 Sunday-coverage objective** —
+rewarding *surplus* eligible coverers per weekend (target ≥ 2, not merely ≥ 1) so the
+downstream call scheduler can balance per-resident call-shift counts — drives it to
+**zero** with no clinical or transition cost:
+
+| Metric (eligibility-based) | Real (in-use) | App v1 (no obj) | **App v2 (obj)** |
+|---|---|---|---|
+| Volunteer (0-coverer) Sundays | 4 | 1 | **0** |
+| Single-coverer weekends | — | 14 | **8** |
+| Weekends with ≥ 2 coverers | — | 11 | **17 / 25** |
+| Direct heavy→different-heavy | 5 | 0 | **0** |
+| Heavy+medium runs > 6 weeks | 0 | 0 | **0** |
+| Six-week runs | 1 | 4 | **3** |
+| Saturday no-Pulm (floor) | 4 | 4 | 4 |
+
+The objective lives in Phase 3, run with Tier-1 (clinical) and Tier-2 (coverage/
+variance) locked ≤ best — so it can only break ties in the already-optimal frontier and
+**cannot degrade clinical or coverage quality** (verified: the v2 solve holds Tier-1 = 0,
+Tier-2 = 0). It is gated on config keys (`weight_sunday_coverage`, `sunday_coverage_target`,
+`heavy_rotation_ids`, `sunday_source_rotation_ids`) and disables itself when the weight is
+0. Tier source is the authoritative workload-tier list, **not** `rotation_type`.
 
 ### ✅ Saturday Y7 night — covered to the mathematical maximum (working as designed)
 Saturday call depends on a **PGY-1 being on Younker 8 Pulmonology**. In a few
@@ -88,19 +137,23 @@ and the residual is expected. No block-side change is needed or possible here.
 
 ---
 
-## Summary: the block schedule already serves the call schedule well
+## Summary: the app improves call coverage without sacrificing transition quality
 
-| Call requirement | Status |
-|---|---|
-| Sunday Y7 night coverable every weekend (no volunteers) | ✅ Met — 0 volunteer weeks |
-| Saturday Y7 night intern coverage | ✅ Maximized — 22/26 (the arithmetic ceiling), evenly distributed |
-| No intern double-booked across Y7 nights | ✅ Structurally impossible (one rotation per block) |
-| Equitable intern Y8Pulm load | ✅ Exactly 2 half-blocks each |
+| Call requirement | Real (in-use) | Block app (Year-2) |
+|---|---|---|
+| Sunday Y7 volunteer-fallback weekends | 4 (blk 1,13,15,19) | **1 (blk 24)** ✅ −75% |
+| Saturday no-intern-on-Pulm half-blocks | 4 (arithmetic floor) | 4 (arithmetic floor) — tie |
+| Equitable intern Y8Pulm load | 2 each | 2 each — tie |
+| Direct heavy→different-heavy switches | 5 | **0** ✅ |
+| Heavy+medium runs > 6 weeks | 0 | 0 — tie |
+| Six-week heavy+medium runs | 1 | 4 (all within the 6-wk preferred max) |
 
-Both the Sunday chain and the Saturday auto-call work as intended. The only
-"gaps" are the four mathematically-forced Y8Pulm half-blocks, which the call
-schedule's upper-level/volunteer fallback exists to cover — this is the designed
-behavior, not a deficiency.
+The app's net effect: it buys a **3-weekend reduction in volunteer-dependent Sunday
+call** and **eliminates all 5 awkward heavy→heavy transitions**, paying only three
+additional six-week runs — none of which exceeds the owner's 6-week preferred maximum,
+so the trade stays inside stated tolerance. The Saturday floor (4 forced no-intern
+half-blocks; 11 interns × 2 = 22 of 26) is unbeatable by either schedule and is what
+the upper-level/volunteer pool is designed to absorb.
 
 ---
 
