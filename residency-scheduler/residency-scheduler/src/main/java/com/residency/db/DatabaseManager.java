@@ -9,12 +9,38 @@ public class DatabaseManager {
     private Connection connection;
 
     private DatabaseManager() throws SQLException {
-        connection = DriverManager.getConnection(DB_URL);
-        connection.createStatement().execute("PRAGMA foreign_keys = ON");
+        connection = openConnection();
         initializeSchema();
     }
 
-    public static DatabaseManager getInstance() throws SQLException {
+    /**
+     * Opens a new SQLite connection with the pragmas this app relies on:
+     *  - foreign_keys = ON   : enforce the ON DELETE CASCADE relationships in the schema.
+     *  - journal_mode = WAL  : allow a reader and a writer to proceed concurrently
+     *                          instead of immediately throwing SQLITE_BUSY. Relevant
+     *                          because the solver runs on a background thread while the
+     *                          JavaFX thread may still read.
+     *  - busy_timeout = 5000 : if a lock is held, wait up to 5s rather than failing.
+     */
+    private static Connection openConnection() throws SQLException {
+        Connection c = DriverManager.getConnection(DB_URL);
+        try (Statement s = c.createStatement()) {
+            s.execute("PRAGMA foreign_keys = ON");
+            s.execute("PRAGMA journal_mode = WAL");
+            s.execute("PRAGMA busy_timeout = 5000");
+        }
+        return c;
+    }
+
+    /**
+     * Returns the shared DatabaseManager, creating it on first call.
+     *
+     * Synchronized to close the double-initialization race that previously
+     * existed: DAOs are constructed from both the JavaFX thread and the solver
+     * background thread, so an unguarded check-then-create could build two
+     * managers (and two connections). See REVIEW.md finding H3.
+     */
+    public static synchronized DatabaseManager getInstance() throws SQLException {
         if (instance == null) {
             instance = new DatabaseManager();
         }
@@ -23,23 +49,23 @@ public class DatabaseManager {
 
     /**
      * Get a guaranteed-valid connection. Call this each time you need a connection.
-     * This method validates the connection and reconnects if necessary.
+     *
+     * The whole app shares a single SQLite connection (DAOs borrow it for the
+     * duration of a single statement via try-with-resources, and never close it).
+     * This method is {@code synchronized} so the validity check and any reconnect
+     * happen atomically; it uses {@link Connection#isValid(int)} rather than
+     * issuing a {@code SELECT 1}, because executing an extra statement here could
+     * interleave with another caller's in-flight statement on the same connection.
+     *
+     * Note: a single JDBC connection still serializes statement execution, so
+     * callers should keep each borrowed statement short. Long-running work that
+     * needs true parallelism (e.g. the solver's feasibility-diagnosis thread pool)
+     * deliberately operates on in-memory CP models and does not touch DAOs.
      */
     public synchronized Connection getValidConnection() throws SQLException {
-        if (connection == null || connection.isClosed()) {
-            // Connection was closed; create a fresh one
-            connection = DriverManager.getConnection(DB_URL);
-            connection.createStatement().execute("PRAGMA foreign_keys = ON");
-        } else {
-            try {
-                // Test if connection is still valid
-                connection.createStatement().execute("SELECT 1");
-            } catch (SQLException e) {
-                // Connection went stale; reconnect
-                try { connection.close(); } catch (Exception ignored) {}
-                connection = DriverManager.getConnection(DB_URL);
-                connection.createStatement().execute("PRAGMA foreign_keys = ON");
-            }
+        if (connection == null || connection.isClosed() || !connection.isValid(2)) {
+            try { if (connection != null) connection.close(); } catch (Exception ignored) {}
+            connection = openConnection();
         }
         return connection;
     }
