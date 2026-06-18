@@ -460,7 +460,7 @@ public class ConstraintBuilder {
         }
     }
 
-    // ── 16. Linked rotation sum constraints ───────────────────────────────
+    // ── 15. Linked rotation sum constraints ───────────────────────────────
 
     /**
      * For each RotationLinkRule (rotA, rotB, sumPerResident, globalTotalForRotB):

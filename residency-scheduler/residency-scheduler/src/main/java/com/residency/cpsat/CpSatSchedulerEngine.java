@@ -19,7 +19,7 @@ import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 
 /**
- * Three-phase CP-SAT scheduling engine.
+ * Four-phase CP-SAT scheduling engine (Phases 0–3).
  *
  * Phase 0 — Feasibility:
  *   Build all Tier-0 hard constraints, NO objective, solve.
@@ -249,7 +249,7 @@ public class CpSatSchedulerEngine {
             return empty;
         }
 
-        int totalBlocks = 26;
+        int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR; // 26 two-week slots = one academic year
         config.setTotalBlocks(totalBlocks);
 
         Map<Integer, int[]> rotationLengths = new HashMap<>();
@@ -292,7 +292,7 @@ public class CpSatSchedulerEngine {
 
         if (stopRequested.get()) return aborted(feasReport);
 
-        // ── 4. Three-phase solve ───────────────────────────────────────────
+        // ── 4. Four-phase solve ────────────────────────────────────────────
 
         // ─── Phase 0: Pure feasibility ────────────────────────────────────
         onProgress.accept(String.format(
@@ -667,7 +667,7 @@ public class CpSatSchedulerEngine {
             ScheduleConfig config) throws SQLException {
         ScheduleSolution sol = best.feasible()
             ? extractSolution(best.solver(), best.status(), best.varFactory(),
-                              residents, rotations, 26, feasReport, startMs)
+                              residents, rotations, ScheduleUnits.SLOTS_PER_YEAR, feasReport, startMs)
             : aborted(feasReport);
         commitToDB(sol, year, blocks, residents, rotations);
         if (sol.getStatus() != ScheduleSolution.Status.INFEASIBLE) {

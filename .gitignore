@@ -42,6 +42,9 @@ Thumbs.db
 hs_err_*.log
 *.hprof
 
+# Runtime logs (e.g. launch.log)
+*.log
+
 # Build
 build/
 .gradle/
