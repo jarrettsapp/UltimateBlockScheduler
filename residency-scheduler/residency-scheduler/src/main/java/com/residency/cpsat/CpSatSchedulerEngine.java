@@ -152,6 +152,51 @@ public class CpSatSchedulerEngine {
 
     private record ModelContext(CpModel model, VariableFactory varFactory) {}
 
+    /**
+     * One toggleable Tier-0 hard constraint: a human-readable label plus the
+     * code that applies it to a ConstraintBuilder.
+     *
+     * This is the single source of truth for both the order constraints are
+     * applied AND the labels shown in the diagnostics. Previously the real model
+     * builder, the stepwise diagnosis, and the removal diagnosis each hard-coded
+     * their own order and label array, which drifted out of sync and could blame
+     * the wrong constraint for an infeasibility (see REVIEW.md finding M1).
+     *
+     * Note: block expansion and cross-rotation no-overlap are applied before any
+     * of these steps in every path, so they are not part of this toggleable list.
+     */
+    private record ConstraintStep(String label, java.util.function.Consumer<ConstraintBuilder> apply) {}
+
+    /**
+     * Canonical ordered list of toggleable hard constraints. The maps/lists the
+     * individual builders need are captured here so callers can apply any subset
+     * by simply iterating (or skipping) entries.
+     */
+    private List<ConstraintStep> orderedConstraintSteps(
+            List<Resident> residents, List<Rotation> rotations,
+            Map<Integer, Map<Integer, RotationRequirement>> reqMap,
+            Map<Integer, List<Prerequisite>> prereqMap,
+            Map<Integer, List<RotationSequenceRule>> seqMap,
+            Map<Integer, Rotation> rotById) {
+        return List.of(
+            new ConstraintStep("Coverage min/max per block",      cb -> cb.applyCoverageConstraints(residents, rotations)),
+            new ConstraintStep("PGY cap constraints",             cb -> cb.applyPgyCapConstraints(residents, rotations)),
+            new ConstraintStep("Workload caps",                   cb -> cb.applyWorkloadCapConstraints(residents, rotations)),
+            new ConstraintStep("Max blocks per resident",         cb -> cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap)),
+            new ConstraintStep("Full-year coverage",              cb -> cb.applyFullYearCoverageConstraints(residents, rotations)),
+            new ConstraintStep("Prerequisites",                   cb -> cb.applyPrerequisiteConstraints(residents, prereqMap, rotById)),
+            new ConstraintStep("Sequence rules",                  cb -> cb.applySequenceRules(residents, seqMap)),
+            new ConstraintStep("No-back-to-back half-blocks",     cb -> cb.applyNoBackToBackHalfBlockConstraints(residents, rotations)),
+            new ConstraintStep("Mutual non-adjacency",            cb -> cb.applyMutualNonAdjacencyConstraints(residents, rotations)),
+            new ConstraintStep("Require break between segments",  cb -> cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations)),
+            new ConstraintStep("Max consecutive blocks",          cb -> cb.applyMaxConsecutiveBlocksConstraints(residents, rotations)),
+            new ConstraintStep("Earliest start block",            cb -> cb.applyEarliestStartConstraints(residents, rotations)),
+            new ConstraintStep("Even block start",                cb -> cb.applyEvenBlockStartConstraints(residents, rotations)),
+            new ConstraintStep("Rotation link rules",             cb -> cb.applyRotationLinkConstraints(residents, rotations)),
+            new ConstraintStep("Requires consecutive",            cb -> cb.applyRequiresConsecutiveConstraints(residents, rotations))
+        );
+    }
+
     private record PhaseResult(
         CpSolverStatus status,
         CpSolver       solver,
@@ -477,21 +522,12 @@ public class CpSatSchedulerEngine {
             .collect(Collectors.toMap(Rotation::getId, r -> r));
 
         ConstraintBuilder cb = new ConstraintBuilder(model, varFactory, config, totalBlocks, auxCoverage);
-        cb.applyCoverageConstraints(residents, rotations);
-        cb.applyPgyCapConstraints(residents, rotations);
-        cb.applyWorkloadCapConstraints(residents, rotations);
-        cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap);
-        cb.applyFullYearCoverageConstraints(residents, rotations);
-        cb.applyPrerequisiteConstraints(residents, prereqMap, rotById);
-        cb.applySequenceRules(residents, seqMap);
-        cb.applyNoBackToBackHalfBlockConstraints(residents, rotations);
-        cb.applyMutualNonAdjacencyConstraints(residents, rotations);
-        cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations);
-        cb.applyMaxConsecutiveBlocksConstraints(residents, rotations);
-        cb.applyEarliestStartConstraints(residents, rotations);
-        cb.applyEvenBlockStartConstraints(residents, rotations);
-        cb.applyRotationLinkConstraints(residents, rotations);
-        cb.applyRequiresConsecutiveConstraints(residents, rotations);
+        // Apply every toggleable hard constraint, in the canonical order. The same
+        // ordered list drives the stepwise and removal diagnostics, so they can
+        // never disagree about which constraint is which (REVIEW.md M1).
+        for (ConstraintStep step : orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById)) {
+            step.apply().accept(cb);
+        }
 
         return new ModelContext(model, varFactory);
     }
@@ -840,26 +876,20 @@ public class CpSatSchedulerEngine {
             Map<Integer, Map<Integer, Integer>> auxCoverage,
             int totalBlocks) {
 
-        String[] labels = {
-            "1.  Block expansion + no-overlap",
-            "2.  + Workload caps",
-            "3.  + Coverage (with aux offset)",
-            "4.  + Max blocks per resident",
-            "5.  + Prerequisites",
-            "6.  + Sequence rules",
-            "7.  + No-back-to-back half-blocks",
-            "8.  + Mutual non-adjacency",
-            "9.  + Require break between segments",
-            "10. + Max consecutive blocks",
-            "11. + Earliest start block",
-            "12. + Even block start",
-            "13. + Rotation link rules (Y7N+Elective=N)",
-            "14. + PGY cap constraints",
-            "15. + Full-year coverage"
-        };
-
         Map<Integer, Rotation> rotById = rotations.stream()
             .collect(Collectors.toMap(Rotation::getId, r -> r));
+
+        // Canonical constraint order — identical to buildBaseModel. Step 0 below is
+        // "block expansion + no-overlap only"; step k>=1 adds the first k constraints
+        // from this list cumulatively, so the lowest INFEASIBLE step pinpoints the
+        // constraint that introduced the contradiction.
+        List<ConstraintStep> steps = orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById);
+
+        String[] labels = new String[steps.size() + 1];
+        labels[0] = "1.  Block expansion + no-overlap";
+        for (int i = 0; i < steps.size(); i++) {
+            labels[i + 1] = String.format("%-2d. + %s", i + 2, steps.get(i).label());
+        }
 
         log.append("  Launching all steps in parallel (1 worker each)…\n");
 
@@ -878,20 +908,8 @@ public class CpSatSchedulerEngine {
                 bes.applyAll(residents, rotations);
                 bes.applyNoOverlapAcrossRotations(residents, rotations);
                 ConstraintBuilder cb = new ConstraintBuilder(m, vf, config, totalBlocks, auxCoverage);
-                if (s >= 1)  cb.applyWorkloadCapConstraints(residents, rotations);
-                if (s >= 2)  cb.applyCoverageConstraints(residents, rotations);
-                if (s >= 3)  cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap);
-                if (s >= 4)  cb.applyPrerequisiteConstraints(residents, prereqMap, rotById);
-                if (s >= 5)  cb.applySequenceRules(residents, seqMap);
-                if (s >= 6)  cb.applyNoBackToBackHalfBlockConstraints(residents, rotations);
-                if (s >= 7)  cb.applyMutualNonAdjacencyConstraints(residents, rotations);
-                if (s >= 8)  cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations);
-                if (s >= 9)  cb.applyMaxConsecutiveBlocksConstraints(residents, rotations);
-                if (s >= 10) cb.applyEarliestStartConstraints(residents, rotations);
-                if (s >= 11) cb.applyEvenBlockStartConstraints(residents, rotations);
-                if (s >= 12) cb.applyRotationLinkConstraints(residents, rotations);
-                if (s >= 13) cb.applyPgyCapConstraints(residents, rotations);
-                if (s >= 14) cb.applyFullYearCoverageConstraints(residents, rotations);
+                // Apply the first s constraints (step 0 applies none beyond expansion).
+                for (int i = 0; i < s; i++) steps.get(i).apply().accept(cb);
                 CpSolver solver = new CpSolver();
                 solver.getParameters().setMaxTimeInSeconds(15);
                 solver.getParameters().setNumWorkers(1);
@@ -939,12 +957,16 @@ public class CpSatSchedulerEngine {
 
         boolean foundInfeasibleStep = firstInfeasible >= 0;
         if (foundInfeasibleStep) {
-            if (firstInfeasible == 3) {
-                log.append("\n  Drilling into Step 4 — adding (resident, rotation) pairs one at a time:\n");
+            // Key the drill-downs off the constraint that first failed, by label, so
+            // they stay correct even if the constraint order changes later. The
+            // culprit constraint is steps.get(firstInfeasible - 1) (step 0 = expansion).
+            String culprit = firstInfeasible >= 1 ? steps.get(firstInfeasible - 1).label() : "";
+            if (culprit.equals("Max blocks per resident")) {
+                log.append("\n  Drilling into '" + culprit + "' — adding (resident, rotation) pairs one at a time:\n");
                 drillMaxBlocksConstraint(log, residents, rotations, config, reqMap,
                     eligibleByRotation, rotationLengths, auxCoverage, totalBlocks);
-            } else if (firstInfeasible == 10) {
-                log.append("\n  Drilling into Step 11 — earliest start block constraints:\n");
+            } else if (culprit.equals("Earliest start block")) {
+                log.append("\n  Drilling into '" + culprit + "' — earliest start block constraints:\n");
                 drillEarliestStartConstraints(log, residents, rotations, config,
                     reqMap, eligibleByRotation, rotationLengths, auxCoverage, totalBlocks);
             }
@@ -958,7 +980,7 @@ public class CpSatSchedulerEngine {
         }
     }
 
-    /** Applies all 15 constraints then drops each one individually to find which removal restores feasibility. */
+    /** Applies all toggleable constraints, then drops each one individually to find which removal restores feasibility. */
     private void runRemovalDiagnosis(
             StringBuilder log,
             List<Resident> residents, List<Rotation> rotations,
@@ -972,27 +994,13 @@ public class CpSatSchedulerEngine {
             int totalBlocks,
             Map<Integer, Rotation> rotById) {
 
-        String[] labels = {
-            "Workload caps",
-            "Coverage",
-            "Max blocks per resident",
-            "Prerequisites",
-            "Sequence rules",
-            "No-back-to-back half-blocks",
-            "Mutual non-adjacency",
-            "Require break between segments",
-            "Max consecutive blocks",
-            "Earliest start block",
-            "Even block start",
-            "Rotation link rules",
-            "PGY cap constraints",
-            "Full-year coverage"
-        };
+        // Same canonical order/labels as buildBaseModel and the stepwise diagnosis.
+        List<ConstraintStep> steps = orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById);
 
         // Use a longer timeout per removal test since we know the full problem is hard
         int removalTimeoutSec = 30;
 
-        for (int drop = 0; drop < labels.length; drop++) {
+        for (int drop = 0; drop < steps.size(); drop++) {
             CpModel m = new CpModel();
             VariableFactory vf = new VariableFactory(m, totalBlocks, rotationLengths);
             vf.createAll(residents, rotations, eligibleByRotation);
@@ -1001,20 +1009,10 @@ public class CpSatSchedulerEngine {
             bes.applyNoOverlapAcrossRotations(residents, rotations);
             ConstraintBuilder cb = new ConstraintBuilder(m, vf, config, totalBlocks, auxCoverage);
 
-            if (drop != 0)  cb.applyWorkloadCapConstraints(residents, rotations);
-            if (drop != 1)  cb.applyCoverageConstraints(residents, rotations);
-            if (drop != 2)  cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap);
-            if (drop != 3)  cb.applyPrerequisiteConstraints(residents, prereqMap, rotById);
-            if (drop != 4)  cb.applySequenceRules(residents, seqMap);
-            if (drop != 5)  cb.applyNoBackToBackHalfBlockConstraints(residents, rotations);
-            if (drop != 6)  cb.applyMutualNonAdjacencyConstraints(residents, rotations);
-            if (drop != 7)  cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations);
-            if (drop != 8)  cb.applyMaxConsecutiveBlocksConstraints(residents, rotations);
-            if (drop != 9)  cb.applyEarliestStartConstraints(residents, rotations);
-            if (drop != 10) cb.applyEvenBlockStartConstraints(residents, rotations);
-            if (drop != 11) cb.applyRotationLinkConstraints(residents, rotations);
-            if (drop != 12) cb.applyPgyCapConstraints(residents, rotations);
-            if (drop != 13) cb.applyFullYearCoverageConstraints(residents, rotations);
+            // Apply every constraint except the one being dropped.
+            for (int i = 0; i < steps.size(); i++) {
+                if (i != drop) steps.get(i).apply().accept(cb);
+            }
 
             CpSolver sv = new CpSolver();
             sv.getParameters().setMaxTimeInSeconds(removalTimeoutSec);
@@ -1026,13 +1024,13 @@ public class CpSatSchedulerEngine {
                 case INFEASIBLE        -> "still INFEASIBLE";
                 default                -> "UNKNOWN (timeout)";
             };
-            log.append(String.format("    drop %-35s → %s\n", labels[drop], result));
+            log.append(String.format("    drop %-35s → %s\n", steps.get(drop).label(), result));
 
             if (st == CpSolverStatus.FEASIBLE || st == CpSolverStatus.OPTIMAL) {
                 log.append(String.format(
                     "\n  ★ Constraint '%s' is part of the conflict. " +
                     "Review its settings — relaxing or removing it should restore feasibility.\n",
-                    labels[drop]));
+                    steps.get(drop).label()));
             }
         }
     }
