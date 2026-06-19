@@ -16,6 +16,17 @@ The SQLite database is created automatically on first launch.
 
 ---
 
+## Key Documentation
+
+| Document | Contents |
+|----------|----------|
+| `SCHEDULING_RULES.md` | The authoritative, plain-English rule set with enforcement tags (solver-hard / soft / operational) and a hand-audit checklist |
+| `COVERAGE_FLOOR_FINDINGS.md` | Proof that the volunteer-weekend floor is 0, and the reversible hard-floor fix |
+| `SCHEDULE_ITERATION_REPORT.md` | Side-by-side comparison of the real-world schedule and app versions |
+| `REVIEW.md` / `RULES_REVIEW.md` | Code-review and rule-encoding findings with resolution status |
+
+---
+
 ## Block Structure
 
 | Term | Definition |
@@ -132,6 +143,21 @@ Runs the constraint-based solver to generate a schedule automatically.
 - Phase 2 — Schedule quality (minimize weighted coverage gaps, workload imbalance, PGY imbalance)
 - Phase 3 — Pattern optimization (encourage 2-inpatient / 1-outpatient repeating cycle)
 
+**Phase-limit presets:** Quick / Standard / Long / Overnight buttons set all four
+phase time limits at once (the per-phase cap is 3600 s). Use Long or Overnight when
+optimizing transitions under a hard coverage floor.
+
+**Require 0 volunteer weekends (hard):** a checkbox that turns on the
+`enforce_zero_volunteer_weekends` constraint — every back-end weekend must have at least
+one eligible categorical coverer, eliminating volunteer Sundays. Default off; fully
+reversible (uncheck and re-solve). The coverage floor was proven achievable — see
+`COVERAGE_FLOOR_FINDINGS.md`.
+
+**Versions…:** save the current schedule as a named "final production" snapshot in the
+database and compare any two saved versions side-by-side on the same metrics (volunteer /
+fragile / healthy weekends, heavy→heavy transitions, long runs, capacity compliance).
+Snapshots survive block-row regeneration.
+
 Other features: live progress log, undo/rollback via snapshots, delete-year capability.
 
 ### Constraints Viewer
@@ -167,6 +193,8 @@ Block expansion and no-overlap are applied first (via `BlockExpansionService`), 
 | 13 | Requires consecutive (no gaps between assignments) | `requiresConsecutive` in Rotation Config |
 | 14 | Linked rotation sum (rotA + rotB = N per resident) | Settings → Linked Rotation Sum Rules |
 | 15 | Full-year coverage (must staff every block) | `optionalFullYearCoverage` in Rotation Config |
+| 16 | Categorical-only cap per rotation per block (e.g. ICU ≤ 1, VA ≤ 2 categoricals) | `categoricalMaxPerBlock` in Rotation Config |
+| 17 | Zero volunteer weekends (≥1 eligible coverer every weekend) — *optional, reversible* | `enforceZeroVolunteerWeekends` (Auto-Scheduler checkbox) |
 
 ### Soft Objectives (minimized in priority order)
 
@@ -188,6 +216,7 @@ Configure trigger/mandatory/discouraged rotation sets in Settings → Post-Call 
 | Overcoverage (actual > max per block) | `weightOvercoverage` | 20 |
 | Workload variance across residents | `weightVariance` | 10 |
 | PGY-level imbalance per block | `weightPgyImbalance` | 15 |
+| Sunday call coverage below target (eligible coverers per weekend) | `weightSundayCoverage` / `sundayCoverageTarget` | 0 / 2 |
 
 **Tier 3 — Pattern** (Phase 3):
 
@@ -241,6 +270,8 @@ Optional: total blocks of rotB across all residents = `globalTotalForRotB`
 | `schedule_config` | Objective weights and solver parameters (key-value store) |
 | `aux_filler_rotations` | Auxiliary resident filler group mappings |
 | `solver_runs` | Solver run history for comparison panel |
+| `schedule_versions` | Named "final production" schedule snapshots (metadata + solve scores) |
+| `schedule_version_assignments` | Per-version assignments, stored by block number so they survive block-row regeneration |
 
 ---
 
@@ -250,12 +281,15 @@ Optional: total blocks of rotB across all residents = `globalTotalForRotB`
 src/main/java/com/residency/
 ├── model/      # Data classes and enums (Resident, Rotation, Block, Assignment, …)
 ├── db/         # SQLite DAOs (one per table)
-├── service/    # Manual validation (SchedulingService) + Timefold runner
+├── service/    # Manual validation (SchedulingService), schedule metrics
+│               #   (ScheduleMetrics, ScheduleMetricsBuilder) + Timefold runner
 ├── export/     # PDF (iText) and Excel (POI) export
 ├── ui/         # JavaFX views (8 tabs + supporting panels)
 ├── cpsat/      # CP-SAT solver: engine, constraints, objectives, variables,
 │               #   feasibility analysis, post-solve validation, scoring (12 classes)
-└── solver/     # Timefold solver: ConstraintProvider, problem facts, score model
+├── solver/     # Timefold solver: ConstraintProvider, problem facts, score model
+└── tools/      # Headless runners (HeadlessSolveRunner, CoverageFloorRunner,
+                #   MetricsReportRunner) — command-line solve / proof / reporting
 src/main/resources/
 └── styles.css  # Application stylesheet
 ```
