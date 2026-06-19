@@ -14,7 +14,15 @@ import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.control.TextArea;
 import javafx.scene.layout.*;
+import javafx.scene.Scene;
+import javafx.stage.Stage;
 import javafx.scene.paint.Color;
+import com.residency.db.ScheduleVersionDAO;
+import com.residency.db.ScheduleConfigDAO;
+import com.residency.cpsat.ScheduleConfig;
+import com.residency.service.ScheduleMetrics;
+import com.residency.service.ScheduleMetricsBuilder;
+import java.util.ArrayList;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 
@@ -55,6 +63,8 @@ public class AutoScheduleView extends BorderPane {
     private final Button             runBtn         = new Button("▶  Start");
     private final Button             stopBtn        = new Button("⏹  Stop & Commit");
     private final Button             undoBtn        = new Button("↩  Undo");
+    private final Button             versionsBtn    = new Button("🗂  Versions…");
+    private final CheckBox           zeroVolunteerCheck = new CheckBox("Require 0 volunteer weekends (hard)");
 
     // Timefold panel widgets
     private final Label  tfScore    = new Label("—");
@@ -81,15 +91,25 @@ public class AutoScheduleView extends BorderPane {
     private final VBox   csProgressRows = new VBox(2);
     private volatile boolean csSolving = false;
 
-    // Per-phase time limits (seconds; 0 = unlimited)
-    private final Spinner<Integer> tier0Spinner = new Spinner<>(0, 600, 60,  15);
-    private final Spinner<Integer> tier1Spinner = new Spinner<>(0, 600, 120, 30);
-    private final Spinner<Integer> tier2Spinner = new Spinner<>(0, 600, 120, 30);
-    private final Spinner<Integer> tier3Spinner = new Spinner<>(0, 600, 60,  15);
+    // Per-phase time limits (seconds; 0 = unlimited). Max raised to 3600 (1 hr/phase) so
+    // capacity-constrained solves, which need long Phase-1 (clinical) and Phase-3 (coverage)
+    // budgets, can be configured from the UI. See the preset buttons below.
+    private final Spinner<Integer> tier0Spinner = new Spinner<>(0, 3600, 60,  15);
+    private final Spinner<Integer> tier1Spinner = new Spinner<>(0, 3600, 120, 30);
+    private final Spinner<Integer> tier2Spinner = new Spinner<>(0, 3600, 120, 30);
+    private final Spinner<Integer> tier3Spinner = new Spinner<>(0, 3600, 60,  15);
     private VBox feasibilityContent;
     private TitledPane feasibilityPane;
 
     private long solveStartMs = 0;
+
+    // Captured from the most recent CP-SAT solve, for "save as version" metadata.
+    // Tier scores aren't exposed as structured fields by ScheduleSolution (only the combined
+    // objective + status), so they're left null; ScheduleMetrics recomputes the quality
+    // numbers from the assignments, which is what the comparison view actually uses.
+    private Integer lastTier1 = null, lastTier2 = null, lastTier3 = null;
+    private boolean lastFeasible = true;
+    private String  lastSummary = null;
 
     public AutoScheduleView() {
         try {
@@ -145,9 +165,11 @@ public class AutoScheduleView extends BorderPane {
             });
         });
 
+        versionsBtn.setStyle("-fx-background-color:#2a4d8b;-fx-text-fill:white;");
+        versionsBtn.setOnAction(e -> openVersionsDialog());
         HBox controls = new HBox(12,
             new Label("Year:"), yearPicker, runBtn, stopBtn, undoBtn,
-            new Separator(javafx.geometry.Orientation.VERTICAL), deleteYearBtn);
+            new Separator(javafx.geometry.Orientation.VERTICAL), versionsBtn, deleteYearBtn);
         controls.setPadding(new Insets(4, 12, 10, 12));
         controls.setAlignment(Pos.CENTER_LEFT);
 
@@ -244,6 +266,30 @@ public class AutoScheduleView extends BorderPane {
             sp.setPrefWidth(72);
             sp.setEditable(true);
         }
+        // Quick presets for the four phase limits (t0,t1,t2,t3 seconds). Long/Overnight give
+        // Phase 1 (clinical) and Phase 3 (coverage) the budgets the capacity-constrained model
+        // needs to reach a good schedule.
+        Button presetQuick     = phasePreset("Quick",     60,  120,  60,  60);
+        Button presetStandard  = phasePreset("Standard",  90,  300, 120, 180);
+        Button presetLong      = phasePreset("Long",      90, 1200, 180, 1200);
+        Button presetOvernight = phasePreset("Overnight", 120, 1800, 300, 3600);
+        HBox presets = new HBox(6,
+            new Label("Presets:"), presetQuick, presetStandard, presetLong, presetOvernight);
+        presets.setAlignment(Pos.CENTER_LEFT);
+        presets.setStyle("-fx-font-size:10px;");
+
+        // Hard floor: zero volunteer weekends (proven achievable). Reversible — persisted to
+        // config so a solve honours it; uncheck to revert. Loaded from current config.
+        zeroVolunteerCheck.setStyle("-fx-font-size:10px;");
+        zeroVolunteerCheck.setTooltip(new Tooltip(
+            "When ON, the solver HARD-requires every weekend to have an eligible Y7 Sunday "
+            + "coverer (zero volunteer weekends). Proven feasible. May worsen transitions — "
+            + "uncheck to revert. Saved to config on solve."));
+        try { zeroVolunteerCheck.setSelected(new ScheduleConfigDAO().loadConfig().isEnforceZeroVolunteerWeekends()); }
+        catch (Exception ignore) {}
+        HBox floorBox = new HBox(6, zeroVolunteerCheck);
+        floorBox.setAlignment(Pos.CENTER_LEFT);
+
         HBox timeLimits = new HBox(8,
             new Label("Phase limits (s):"),
             new Label("0-Feasibility"), tier0Spinner,
@@ -254,6 +300,7 @@ public class AutoScheduleView extends BorderPane {
         timeLimits.setAlignment(Pos.CENTER_LEFT);
         timeLimits.setPadding(new Insets(4, 0, 4, 0));
         timeLimits.setStyle("-fx-font-size:10px;");
+        VBox limitsBox = new VBox(2, timeLimits, presets, floorBox);
 
         // Score progress history panel
         Label progressHeader = new Label("  Time       Elapsed    Backtracks   Branches     Objective");
@@ -274,7 +321,7 @@ public class AutoScheduleView extends BorderPane {
         logPane.setExpanded(false);
         TitledPane diagPane   = buildFeasibilityPane();
 
-        VBox panel = new VBox(10, statusBox, timeLimits, progressPane, diagPane, logPane);
+        VBox panel = new VBox(10, statusBox, limitsBox, progressPane, diagPane, logPane);
         panel.setPadding(new Insets(6));
         return panel;
     }
@@ -283,6 +330,22 @@ public class AutoScheduleView extends BorderPane {
         Label lbl = new Label(text);
         lbl.setStyle("-fx-font-weight:bold;-fx-font-size:14px;-fx-text-fill:" + color + ";");
         return lbl;
+    }
+
+    /** A button that sets all four phase-limit spinners to the given seconds. */
+    private Button phasePreset(String label, int t0, int t1, int t2, int t3) {
+        Button b = new Button(label);
+        b.setStyle("-fx-font-size:10px;-fx-padding:1 6 1 6;");
+        long total = (long) t0 + t1 + t2 + t3;
+        b.setTooltip(new Tooltip(String.format(
+            "Phase limits: %d / %d / %d / %d s  (≈ %d min max)", t0, t1, t2, t3, (total + 59) / 60)));
+        b.setOnAction(e -> {
+            tier0Spinner.getValueFactory().setValue(t0);
+            tier1Spinner.getValueFactory().setValue(t1);
+            tier2Spinner.getValueFactory().setValue(t2);
+            tier3Spinner.getValueFactory().setValue(t3);
+        });
+        return b;
     }
 
     private TitledPane buildConstraintInfoPane() {
@@ -472,8 +535,19 @@ public class AutoScheduleView extends BorderPane {
         poller.setDaemon(true);
         poller.start();
 
+        final boolean enforceZeroVol = zeroVolunteerCheck.isSelected();
         Thread worker = new Thread(() -> {
             try {
+                // Persist the zero-volunteer-floor toggle so the engine (which loads config
+                // from the DB) honours it for this solve.
+                try {
+                    ScheduleConfigDAO cfgDao = new ScheduleConfigDAO();
+                    ScheduleConfig cfg = cfgDao.loadConfig();
+                    cfg.setEnforceZeroVolunteerWeekends(enforceZeroVol);
+                    cfgDao.saveConfig(cfg);
+                } catch (Exception ex) {
+                    Platform.runLater(() -> csLogLine("⚠ Could not save zero-volunteer setting: " + ex.getMessage()));
+                }
                 cpSatEngine = new CpSatSchedulerEngine();
                 int t0 = tier0Spinner.getValue();
                 int t1 = tier1Spinner.getValue();
@@ -526,6 +600,10 @@ public class AutoScheduleView extends BorderPane {
         boolean ok = sol.isFeasible();
         csFeasible.setText(ok ? "✅ FEASIBLE" : "⚠ INFEASIBLE");
         csFeasible.setStyle("-fx-font-weight:bold;-fx-text-fill:" + (ok ? "#155724" : "#8b1a1a") + ";");
+
+        // Remember this solve for "save as version".
+        lastFeasible = ok;
+        lastSummary  = sol.statusSummary();
 
         // Populate feasibility diagnostics pane with full solver log
         feasibilityContent.getChildren().clear();
@@ -640,5 +718,193 @@ public class AutoScheduleView extends BorderPane {
 
     private void showError(String msg) {
         new Alert(Alert.AlertType.ERROR, msg, ButtonType.OK).showAndWait();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Schedule versions — save / load / delete / compare
+    // ══════════════════════════════════════════════════════════════════════
+
+    private void openVersionsDialog() {
+        Integer year = yearPicker.getValue();
+        if (year == null) { showError("Select a year first."); return; }
+
+        Stage dialog = new Stage();
+        dialog.setTitle("Schedule versions — year " + year);
+
+        ListView<com.residency.model.ScheduleVersion> list = new ListView<>();
+        list.setPrefSize(360, 320);
+        list.setCellFactory(lv -> new ListCell<>() {
+            @Override protected void updateItem(com.residency.model.ScheduleVersion v, boolean empty) {
+                super.updateItem(v, empty);
+                if (empty || v == null) { setText(null); return; }
+                String scores = (v.getTier1Score() == null) ? "" :
+                    String.format("  [T1 %d / T2 %d / T3 %d]",
+                        nz(v.getTier1Score()), nz(v.getTier2Score()), nz(v.getTier3Score()));
+                setText(v.getName() + "\n   " + v.getCreatedAt() + scores
+                    + (v.isFeasible() ? "" : "  (infeasible)"));
+            }
+        });
+
+        TextArea detail = new TextArea();
+        detail.setEditable(false);
+        detail.setPrefSize(420, 320);
+        detail.setStyle("-fx-font-family:'Consolas','Courier New',monospace;-fx-font-size:11px;");
+
+        Runnable refresh = () -> {
+            try {
+                ScheduleVersionDAO dao = new ScheduleVersionDAO();
+                list.getItems().setAll(dao.listVersions(year));
+            } catch (Exception ex) { showError("Load versions failed: " + ex.getMessage()); }
+        };
+        refresh.run();
+
+        list.getSelectionModel().selectedItemProperty().addListener((o, old, sel) -> {
+            if (sel == null) { detail.clear(); return; }
+            detail.setText(metricsReport(sel));
+        });
+
+        Button saveBtn   = new Button("💾  Save current as version…");
+        Button loadBtn   = new Button("↩  Load into schedule");
+        Button deleteBtn = new Button("🗑  Delete");
+        Button compareBtn= new Button("⇄  Compare two…");
+        Button exportBtn = new Button("⧉  Export comparison (.md)");
+        loadBtn.setDisable(true); deleteBtn.setDisable(true);
+        list.getSelectionModel().selectedItemProperty().addListener((o, old, sel) -> {
+            boolean has = sel != null;
+            loadBtn.setDisable(!has); deleteBtn.setDisable(!has);
+        });
+
+        saveBtn.setOnAction(e -> { saveCurrentAsVersion(year); refresh.run(); });
+        loadBtn.setOnAction(e -> {
+            var sel = list.getSelectionModel().getSelectedItem();
+            if (sel == null) return;
+            Alert c = new Alert(Alert.AlertType.CONFIRMATION,
+                "Load \"" + sel.getName() + "\" into the live schedule for year " + year
+                + "?\n\nThis replaces the current assignments for the year.", ButtonType.OK, ButtonType.CANCEL);
+            if (c.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
+                try { new ScheduleVersionDAO().loadVersion(sel.getId());
+                    new Alert(Alert.AlertType.INFORMATION,
+                        "Loaded \"" + sel.getName() + "\". Reopen the Schedule view to see it.",
+                        ButtonType.OK).showAndWait();
+                } catch (Exception ex) { showError("Load failed: " + ex.getMessage()); }
+            }
+        });
+        deleteBtn.setOnAction(e -> {
+            var sel = list.getSelectionModel().getSelectedItem();
+            if (sel == null) return;
+            Alert c = new Alert(Alert.AlertType.CONFIRMATION,
+                "Delete version \"" + sel.getName() + "\"? This cannot be undone.",
+                ButtonType.OK, ButtonType.CANCEL);
+            if (c.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
+                try { new ScheduleVersionDAO().deleteVersion(sel.getId()); refresh.run(); detail.clear(); }
+                catch (Exception ex) { showError("Delete failed: " + ex.getMessage()); }
+            }
+        });
+        compareBtn.setOnAction(e -> showComparison(year, list.getItems(), false));
+        exportBtn.setOnAction(e -> showComparison(year, list.getItems(), true));
+
+        VBox actions = new VBox(8, saveBtn, new Separator(), loadBtn, deleteBtn,
+            new Separator(), compareBtn, exportBtn);
+        actions.setPadding(new Insets(10));
+        for (Button b : List.of(saveBtn, loadBtn, deleteBtn, compareBtn, exportBtn)) b.setMaxWidth(Double.MAX_VALUE);
+
+        HBox body = new HBox(10, list, detail, actions);
+        body.setPadding(new Insets(12));
+        Scene sc = new Scene(body);
+        dialog.setScene(sc);
+        dialog.show();
+    }
+
+    /** Prompts for a name + notes and saves the live schedule as a version, with current scores. */
+    private void saveCurrentAsVersion(int year) {
+        TextInputDialog nameDlg = new TextInputDialog(
+            "v" + java.time.LocalDate.now() + "-" + (System.currentTimeMillis() % 1000));
+        nameDlg.setHeaderText("Save the current schedule for year " + year + " as a named version");
+        nameDlg.setContentText("Version name:");
+        String name = nameDlg.showAndWait().orElse(null);
+        if (name == null || name.isBlank()) return;
+
+        TextInputDialog notesDlg = new TextInputDialog("");
+        notesDlg.setHeaderText("Optional notes for \"" + name + "\"");
+        notesDlg.setContentText("Notes:");
+        String notes = notesDlg.showAndWait().orElse("");
+
+        try {
+            ScheduleVersionDAO dao = new ScheduleVersionDAO();
+            if (dao.nameExists(year, name)) { showError("A version named \"" + name + "\" already exists for this year."); return; }
+            dao.saveVersion(year, name, notes, lastTier1, lastTier2, lastTier3, lastFeasible, lastSummary);
+            new Alert(Alert.AlertType.INFORMATION, "Saved version \"" + name + "\".", ButtonType.OK).showAndWait();
+        } catch (Exception ex) { showError("Save failed: " + ex.getMessage()); }
+    }
+
+    private String metricsReport(com.residency.model.ScheduleVersion v) {
+        try {
+            ScheduleMetrics.Result r = new ScheduleMetricsBuilder().forVersion(v.getId());
+            return formatMetrics(v.getName(), r);
+        } catch (Exception ex) { return "Metrics unavailable: " + ex.getMessage(); }
+    }
+
+    private static String formatMetrics(String title, ScheduleMetrics.Result r) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(title).append("\n").append("=".repeat(Math.min(40, title.length()))).append("\n\n");
+        sb.append("CAPACITY: ").append(r.capacityClean() ? "clean ✓" : (r.capacityViolations.size() + " violation(s)")).append("\n");
+        for (String v : r.capacityViolations) sb.append("   • ").append(v).append("\n");
+        sb.append("\nCALL COVERAGE (Sunday Y7):\n");
+        sb.append("   volunteer (0-coverer) weekends: ").append(r.volunteerWeekends).append("\n");
+        sb.append("   fragile (1-coverer) weekends:   ").append(r.fragileWeekends).append("\n");
+        sb.append("   healthy (≥2) weekends:          ").append(r.healthyWeekends).append(" / ").append(ScheduleMetrics.SLOTS - 1).append("\n");
+        sb.append("   Saturday no-Y8Pulm half-blocks: ").append(r.saturdayNoPulmHalfBlocks).append("\n");
+        sb.append("\nTRANSITIONS:\n");
+        sb.append("   heavy → different-heavy:        ").append(r.heavyToDifferentHeavy).append("\n");
+        sb.append("   heavy+medium runs > 6 weeks:    ").append(r.runsOver6Weeks).append("\n");
+        sb.append("   run-length histogram (weeks):   ").append(r.heavyMediumRunWeeks).append("\n");
+        return sb.toString();
+    }
+
+    private static int nz(Integer i) { return i == null ? 0 : i; }
+
+    /** Side-by-side comparison of all versions; optionally writes a markdown file. */
+    private void showComparison(int year, List<com.residency.model.ScheduleVersion> versions, boolean export) {
+        if (versions.isEmpty()) { showError("No saved versions to compare."); return; }
+        try {
+            ScheduleMetricsBuilder builder = new ScheduleMetricsBuilder();
+            StringBuilder md = new StringBuilder();
+            md.append("# Schedule version comparison — year ").append(year).append("\n\n");
+            md.append("| Metric | ").append(String.join(" | ",
+                versions.stream().map(com.residency.model.ScheduleVersion::getName).toList())).append(" |\n");
+            md.append("|---|").append("---|".repeat(versions.size())).append("\n");
+
+            List<ScheduleMetrics.Result> rs = new ArrayList<>();
+            for (var v : versions) rs.add(builder.forVersion(v.getId()));
+
+            md.append(row("Capacity violations", rs, r -> String.valueOf(r.capacityViolations.size())));
+            md.append(row("Volunteer Sundays", rs, r -> String.valueOf(r.volunteerWeekends)));
+            md.append(row("Fragile weekends", rs, r -> String.valueOf(r.fragileWeekends)));
+            md.append(row("Healthy weekends", rs, r -> r.healthyWeekends + "/" + (ScheduleMetrics.SLOTS - 1)));
+            md.append(row("Heavy→diff-heavy", rs, r -> String.valueOf(r.heavyToDifferentHeavy)));
+            md.append(row("Runs > 6 weeks", rs, r -> String.valueOf(r.runsOver6Weeks)));
+            md.append(row("Saturday no-Pulm", rs, r -> String.valueOf(r.saturdayNoPulmHalfBlocks)));
+
+            if (export) {
+                java.io.File f = new java.io.File("schedule_version_comparison_year" + year + ".md");
+                java.nio.file.Files.writeString(f.toPath(), md.toString());
+                new Alert(Alert.AlertType.INFORMATION, "Wrote " + f.getAbsolutePath(), ButtonType.OK).showAndWait();
+            } else {
+                TextArea ta = new TextArea(md.toString());
+                ta.setEditable(false);
+                ta.setStyle("-fx-font-family:'Consolas','Courier New',monospace;-fx-font-size:11px;");
+                Stage s = new Stage();
+                s.setTitle("Comparison — year " + year);
+                s.setScene(new Scene(new VBox(ta), 720, 360));
+                s.show();
+            }
+        } catch (Exception ex) { showError("Comparison failed: " + ex.getMessage()); }
+    }
+
+    private static String row(String label, List<ScheduleMetrics.Result> rs,
+                              java.util.function.Function<ScheduleMetrics.Result, String> cell) {
+        StringBuilder sb = new StringBuilder("| ").append(label).append(" | ");
+        for (var r : rs) sb.append(cell.apply(r)).append(" | ");
+        return sb.append("\n").toString();
     }
 }

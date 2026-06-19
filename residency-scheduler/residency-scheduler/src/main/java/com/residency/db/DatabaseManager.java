@@ -239,7 +239,33 @@ public class DatabaseManager {
                 resident_group TEXT NOT NULL,
                 rotation_id INTEGER NOT NULL REFERENCES rotations(id) ON DELETE CASCADE,
                 UNIQUE(resident_group, rotation_id)
-            )"""
+            )""",
+            // Named schedule snapshots, so multiple "final" schedules can be saved and
+            // compared over time instead of each solve overwriting the last. Assignments
+            // are stored by block_number (1-based) rather than block_id so a version stays
+            // loadable even if the year's block rows are regenerated.
+            """
+            CREATE TABLE IF NOT EXISTS schedule_versions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                schedule_year INTEGER NOT NULL,
+                name          TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                notes         TEXT,
+                tier1_score   INTEGER,
+                tier2_score   INTEGER,
+                tier3_score   INTEGER,
+                feasible      INTEGER NOT NULL DEFAULT 1,
+                summary       TEXT,
+                UNIQUE(schedule_year, name)
+            )""",
+            """
+            CREATE TABLE IF NOT EXISTS schedule_version_assignments (
+                version_id   INTEGER NOT NULL REFERENCES schedule_versions(id) ON DELETE CASCADE,
+                resident_id  INTEGER NOT NULL,
+                rotation_id  INTEGER NOT NULL,
+                block_number INTEGER NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_sva_version ON schedule_version_assignments(version_id)"
         };
         try (Statement stmt = connection.createStatement()) {
             for (String sql : migrations) {

@@ -184,6 +184,7 @@ public class CpSatSchedulerEngine {
         return List.of(
             new ConstraintStep("Coverage min/max per block",      cb -> cb.applyCoverageConstraints(residents, rotations)),
             new ConstraintStep("Categorical-only per-block caps", cb -> cb.applyCategoricalCapConstraints(residents, rotations)),
+            new ConstraintStep("Zero-volunteer-weekend floor",    cb -> cb.applyZeroVolunteerFloor(residents, rotations)),
             new ConstraintStep("PGY cap constraints",             cb -> cb.applyPgyCapConstraints(residents, rotations)),
             new ConstraintStep("Workload caps",                   cb -> cb.applyWorkloadCapConstraints(residents, rotations)),
             new ConstraintStep("Max blocks per resident",         cb -> cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap)),
@@ -211,6 +212,250 @@ public class CpSatSchedulerEngine {
         boolean feasible() {
             return status == CpSolverStatus.FEASIBLE || status == CpSolverStatus.OPTIMAL;
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Coverage-floor prover
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** Result of a coverage-floor proof. */
+    public record CoverageFloorResult(CpSolverStatus status, int volunteerWeekends,
+                                       boolean proven, String log) {}
+
+    /**
+     * Builds the SAME hard-constrained model as a real solve (identical capacity, shape,
+     * link, and requirement constraints — via {@link #buildBaseModel}) but replaces ALL soft
+     * objectives with a single one: MINIMIZE the number of volunteer weekends (weekends with
+     * zero eligible categorical Sunday-Y7 coverer). A categorical covers weekend b (the
+     * back-end of half-block b) iff it is non-heavy at slot b AND non-heavy at slot b+1
+     * (the entering-heavy pre-lock); since every non-heavy rotation is a Sunday source, this
+     * is exactly "light/medium at both b and b+1".
+     *
+     * <p>If this returns OPTIMAL with N volunteer weekends, N is the true mathematical floor:
+     * no schedule satisfying the hard constraints can do better, so no amount of additional
+     * solving on the full objective can beat it. Used to decide whether a long optimization
+     * run is worthwhile before spending the hours.
+     */
+    public CoverageFloorResult proveCoverageFloor(int year, int timeLimitSec) throws SQLException {
+        return proveCoverageFloor(year, timeLimitSec, false);
+    }
+
+    public CoverageFloorResult proveCoverageFloor(int year, int timeLimitSec,
+                                                  boolean minTransitionsAtZeroVolunteers) throws SQLException {
+        ensureNativeLibraries();
+        StringBuilder log = new StringBuilder();
+
+        ScheduleConfig            config        = configDAO.loadConfig();
+        List<Resident>            residents     = residentDAO.getMainResidents();
+        List<Resident>            auxResidents  = residentDAO.getAuxiliaryResidents();
+        List<Rotation>            rotations     = rotationDAO.getAll();
+        List<Block>               blocks        = blockDAO.getByYear(year);
+        List<RotationRequirement> reqs          = rulesDAO.getAllRequirements();
+        List<Prerequisite>        prereqs       = rulesDAO.getAllPrerequisites();
+        List<RotationSequenceRule> sequenceRules = rulesDAO.getAllSequenceRules();
+        if (residents.isEmpty() || rotations.isEmpty() || blocks.isEmpty())
+            return new CoverageFloorResult(CpSolverStatus.MODEL_INVALID, -1, false, "No data for year " + year);
+
+        int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR;
+        config.setTotalBlocks(totalBlocks);
+        Map<Integer, int[]> rotationLengths = new HashMap<>();
+        for (Rotation r : rotations) {
+            ScheduleConfig.RotationPolicy policy = configDAO.loadRotationPolicy(r.getId());
+            config.getRotationPolicies().put(r.getId(), policy);
+            rotationLengths.put(r.getId(), policy.allowedBlockLengths);
+        }
+        Map<Integer, Map<Integer, RotationRequirement>> reqMap = buildReqMap(reqs);
+        Map<Integer, Set<Integer>>  eligibleByRotation = buildEligibilityMap(residents, rotations, reqMap);
+        Map<Integer, List<Prerequisite>> prereqMap     = buildPrereqMap(prereqs);
+        Map<Integer, List<RotationSequenceRule>> seqMap = buildSequenceRuleMap(sequenceRules);
+        config.setRotationLinkRules(linkRuleDAO.getAll());
+        List<Integer> auxIds = auxResidents.stream().map(Resident::getId).collect(Collectors.toList());
+        Map<String, Set<Integer>> fillerRotationsByGroup = auxFillerRotationDAO.getAllFillerRotations();
+        Set<String> fillerExclusions = buildFillerExclusions(auxResidents, fillerRotationsByGroup);
+        Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
+            ? new HashMap<>()
+            : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+
+        ModelContext mc = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
+            eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+        CpModel model = mc.model();
+        VariableFactory vf = mc.varFactory();
+
+        // Heavy rotation ids (authoritative tier list, by name).
+        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
+            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
+        Set<Integer> heavyIds = rotations.stream()
+            .filter(r -> heavyNames.contains(r.getName())).map(Rotation::getId)
+            .collect(Collectors.toSet());
+
+        // heavy[r][b] = 1 iff resident r is on any heavy rotation at slot b.
+        // coverer[r][b] (weekend b) = 1 iff NOT heavy@b AND NOT heavy@b+1.
+        // volunteer[b] = 1 iff sum_r coverer[r][b] == 0.
+        List<BoolVar> volunteerVars = new ArrayList<>();
+        for (int b = 0; b + 1 < totalBlocks; b++) {
+            List<BoolVar> coverers = new ArrayList<>();
+            for (Resident r : residents) {
+                // heavyAtB, heavyAtB1 as sums of occupancy over heavy rotations.
+                List<BoolVar> hB = new ArrayList<>(), hB1 = new ArrayList<>();
+                for (int hid : heavyIds) {
+                    BoolVar oB = vf.getOccupancyVar(r.getId(), hid, b);
+                    if (oB != null) hB.add(oB);
+                    BoolVar oB1 = vf.getOccupancyVar(r.getId(), hid, b + 1);
+                    if (oB1 != null) hB1.add(oB1);
+                }
+                // cover = 1 - heavyAtB - heavyAtB1 clamped; model as: cover <= 1-heavyAtB,
+                // cover <= 1-heavyAtB1, cover >= 1-heavyAtB-heavyAtB1.
+                BoolVar cover = model.newBoolVar(String.format("cov_r%d_b%d", r.getId(), b));
+                LinearExprBuilder sumB = LinearExpr.newBuilder();
+                hB.forEach(sumB::add);
+                LinearExprBuilder sumB1 = LinearExpr.newBuilder();
+                hB1.forEach(sumB1::add);
+                // cover + heavyAtB <= 1
+                model.addLessOrEqual(LinearExpr.newBuilder().add(cover).addSum(hB.toArray(new BoolVar[0])).build(), 1);
+                // cover + heavyAtB1 <= 1
+                model.addLessOrEqual(LinearExpr.newBuilder().add(cover).addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                // cover >= 1 - heavyAtB - heavyAtB1  ->  cover + heavyAtB + heavyAtB1 >= 1
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(cover)
+                        .addSum(hB.toArray(new BoolVar[0]))
+                        .addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                coverers.add(cover);
+            }
+            // volunteer[b] = 1 iff sum(coverers) == 0  ->  sum + M*volunteer >= 1, volunteer <= 1-...
+            // Simpler: volunteer is BoolVar with  sum(coverers) >= 1 - volunteer*BIG is awkward;
+            // use: anyCover = OR(coverers); volunteer = 1 - anyCover.
+            BoolVar volunteer = model.newBoolVar("volunteer_b" + b);
+            // volunteer + sum(coverers) >= 1  (if no coverer, volunteer must be 1)
+            model.addGreaterOrEqual(
+                LinearExpr.newBuilder().add(volunteer).addSum(coverers.toArray(new BoolVar[0])).build(), 1);
+            // volunteer <= 1 - cover for each coverer (if any coverer=1, volunteer=0)
+            for (BoolVar cov : coverers)
+                model.addLessOrEqual(LinearExpr.newBuilder().add(volunteer).add(cov).build(), 1);
+            volunteerVars.add(volunteer);
+        }
+
+        IntVar volunteerTotal = model.newIntVar(0, volunteerVars.size(), "volunteer_total");
+        model.addEquality(volunteerTotal, LinearExpr.sum(volunteerVars.toArray(new BoolVar[0])));
+
+        if (minTransitionsAtZeroVolunteers) {
+            // Hard-lock volunteers to 0, then minimize a transition proxy: count of
+            // heavy→different-heavy adjacencies plus heavy/medium "run-excess" beyond 3 slots
+            // (6 weeks). This shows the BEST transition quality achievable with perfect
+            // coverage — the real schedule a volunteers=0 hard floor would produce.
+            model.addEquality(volunteerTotal, 0);
+
+            Set<Integer> medNames = rotations.stream()
+                .filter(r -> r.getName().equals("Inpatient GI") || r.getName().equals("Infectious Disease"))
+                .map(Rotation::getId).collect(Collectors.toSet());
+            List<BoolVar> heavyHeavy = new ArrayList<>();
+            // Build heavy/medium indicator per resident-slot and the heavy→diff-heavy terms.
+            Map<String, BoolVar> hmVar = new HashMap<>();
+            for (Resident r : residents) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    List<BoolVar> occs = new ArrayList<>();
+                    for (int id : heavyIds) { BoolVar o = vf.getOccupancyVar(r.getId(), id, b); if (o != null) occs.add(o); }
+                    for (int id : medNames) { BoolVar o = vf.getOccupancyVar(r.getId(), id, b); if (o != null) occs.add(o); }
+                    BoolVar hm = model.newBoolVar("hm_r" + r.getId() + "_b" + b);
+                    // hm = OR(occs)
+                    model.addGreaterOrEqual(LinearExpr.newBuilder().add(hm).build(),
+                        LinearExpr.newBuilder().addSum(occs.toArray(new BoolVar[0])).build());
+                    for (BoolVar o : occs) model.addLessOrEqual(o, hm);
+                    hmVar.put(r.getId() + "_" + b, hm);
+                }
+            }
+            // heavy→different-heavy adjacencies
+            for (Resident r : residents) {
+                for (int b = 0; b + 1 < totalBlocks; b++) {
+                    for (int h1 : heavyIds) {
+                        BoolVar o1 = vf.getOccupancyVar(r.getId(), h1, b);
+                        if (o1 == null) continue;
+                        for (int h2 : heavyIds) {
+                            if (h1 == h2) continue;
+                            BoolVar o2 = vf.getOccupancyVar(r.getId(), h2, b + 1);
+                            if (o2 == null) continue;
+                            // v = o1 AND o2 : v<=o1, v<=o2, v>=o1+o2-1.
+                            BoolVar v = model.newBoolVar("hh_r" + r.getId() + "_b" + b + "_" + h1 + "_" + h2);
+                            model.addLessOrEqual(v, o1);
+                            model.addLessOrEqual(v, o2);
+                            model.addGreaterOrEqual(
+                                LinearExpr.newBuilder().add(v).build(),
+                                LinearExpr.newBuilder().add(o1).add(o2).add(-1).build());
+                            heavyHeavy.add(v);
+                        }
+                    }
+                }
+            }
+            // run-excess: for each window of 4 consecutive slots (8 weeks), penalize if all 4
+            // are heavy/medium (a >6-week run). Sum over windows ≈ count of long-run slots.
+            List<BoolVar> longRun = new ArrayList<>();
+            for (Resident r : residents) {
+                for (int b = 0; b + 3 < totalBlocks; b++) {
+                    BoolVar w = model.newBoolVar("long_r" + r.getId() + "_b" + b);
+                    // w = 1 iff hm[b]..hm[b+3] all 1
+                    List<BoolVar> four = new ArrayList<>();
+                    for (int k = 0; k < 4; k++) four.add(hmVar.get(r.getId() + "_" + (b + k)));
+                    for (BoolVar h : four) model.addGreaterOrEqual(h, w);
+                    model.addLessOrEqual(LinearExpr.newBuilder().add(w).build(),
+                        LinearExpr.newBuilder().addSum(four.toArray(new BoolVar[0])).add(-3).build());
+                    longRun.add(w);
+                }
+            }
+            LinearExprBuilder obj = LinearExpr.newBuilder();
+            for (BoolVar v : heavyHeavy) obj.addTerm(v, 10);  // heavy→heavy weighted heavier
+            for (BoolVar v : longRun) obj.addTerm(v, 3);
+            IntVar transCost = model.newIntVar(0, 100000, "trans_cost");
+            model.addEquality(transCost, obj.build());
+            model.minimize(transCost);
+        } else {
+            model.minimize(volunteerTotal);
+        }
+
+        CpSolver solver = configureSolver(config, timeLimitSec);
+        long t0 = System.currentTimeMillis();
+        CpSolverStatus status = solver.solve(model);
+        double secs = (System.currentTimeMillis() - t0) / 1000.0;
+
+        int vol = -1;
+        if (status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE) {
+            vol = (int) Math.round(solver.value(volunteerTotal));
+            // Independent audit: dump per-resident heavy slot counts so a false floor (one
+            // that dodged the heavy requirements) is caught — the totals must match the
+            // required load (VA=4, ICU/BMC/Y7D/Y8P=2, Y7N≈2 slots per resident).
+            log.append("  AUDIT — per-resident heavy slots (must be ~13–14): ");
+            for (Resident r : residents) {
+                int h = 0;
+                for (int hid : heavyIds)
+                    for (int b = 0; b < totalBlocks; b++) {
+                        BoolVar o = vf.getOccupancyVar(r.getId(), hid, b);
+                        if (o != null && solver.booleanValue(o)) h++;
+                    }
+                log.append(h).append(" ");
+            }
+            log.append("\n");
+            // Dump the full assignment grid (resident,slot,rotation) so it can be independently
+            // re-scored by the external metrics. Marker line for easy parsing.
+            log.append("GRID_BEGIN\n");
+            for (Resident r : residents) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    for (Rotation s : rotations) {
+                        BoolVar o = vf.getOccupancyVar(r.getId(), s.getId(), b);
+                        if (o != null && solver.booleanValue(o)) {
+                            log.append(r.getId()).append(',').append(b).append(',')
+                               .append(s.getName()).append('\n');
+                        }
+                    }
+                }
+            }
+            log.append("GRID_END\n");
+        }
+        boolean proven = status == CpSolverStatus.OPTIMAL;
+        log.append(String.format("Coverage-floor proof: status=%s  volunteerWeekends=%d  proven=%s  (%.1fs)%n",
+            status, vol, proven, secs));
+        if (proven)
+            log.append("  => This IS the mathematical floor; no full-objective solve can beat it.\n");
+        else
+            log.append("  => Not proven optimal within the time limit (lower bound only).\n");
+        return new CoverageFloorResult(status, vol, proven, log.toString());
     }
 
     // ══════════════════════════════════════════════════════════════════════
