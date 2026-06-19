@@ -18,6 +18,8 @@ import javafx.scene.Scene;
 import javafx.stage.Stage;
 import javafx.scene.paint.Color;
 import com.residency.db.ScheduleVersionDAO;
+import com.residency.db.ScheduleConfigDAO;
+import com.residency.cpsat.ScheduleConfig;
 import com.residency.service.ScheduleMetrics;
 import com.residency.service.ScheduleMetricsBuilder;
 import java.util.ArrayList;
@@ -62,6 +64,7 @@ public class AutoScheduleView extends BorderPane {
     private final Button             stopBtn        = new Button("⏹  Stop & Commit");
     private final Button             undoBtn        = new Button("↩  Undo");
     private final Button             versionsBtn    = new Button("🗂  Versions…");
+    private final CheckBox           zeroVolunteerCheck = new CheckBox("Require 0 volunteer weekends (hard)");
 
     // Timefold panel widgets
     private final Label  tfScore    = new Label("—");
@@ -275,6 +278,18 @@ public class AutoScheduleView extends BorderPane {
         presets.setAlignment(Pos.CENTER_LEFT);
         presets.setStyle("-fx-font-size:10px;");
 
+        // Hard floor: zero volunteer weekends (proven achievable). Reversible — persisted to
+        // config so a solve honours it; uncheck to revert. Loaded from current config.
+        zeroVolunteerCheck.setStyle("-fx-font-size:10px;");
+        zeroVolunteerCheck.setTooltip(new Tooltip(
+            "When ON, the solver HARD-requires every weekend to have an eligible Y7 Sunday "
+            + "coverer (zero volunteer weekends). Proven feasible. May worsen transitions — "
+            + "uncheck to revert. Saved to config on solve."));
+        try { zeroVolunteerCheck.setSelected(new ScheduleConfigDAO().loadConfig().isEnforceZeroVolunteerWeekends()); }
+        catch (Exception ignore) {}
+        HBox floorBox = new HBox(6, zeroVolunteerCheck);
+        floorBox.setAlignment(Pos.CENTER_LEFT);
+
         HBox timeLimits = new HBox(8,
             new Label("Phase limits (s):"),
             new Label("0-Feasibility"), tier0Spinner,
@@ -285,7 +300,7 @@ public class AutoScheduleView extends BorderPane {
         timeLimits.setAlignment(Pos.CENTER_LEFT);
         timeLimits.setPadding(new Insets(4, 0, 4, 0));
         timeLimits.setStyle("-fx-font-size:10px;");
-        VBox limitsBox = new VBox(2, timeLimits, presets);
+        VBox limitsBox = new VBox(2, timeLimits, presets, floorBox);
 
         // Score progress history panel
         Label progressHeader = new Label("  Time       Elapsed    Backtracks   Branches     Objective");
@@ -520,8 +535,19 @@ public class AutoScheduleView extends BorderPane {
         poller.setDaemon(true);
         poller.start();
 
+        final boolean enforceZeroVol = zeroVolunteerCheck.isSelected();
         Thread worker = new Thread(() -> {
             try {
+                // Persist the zero-volunteer-floor toggle so the engine (which loads config
+                // from the DB) honours it for this solve.
+                try {
+                    ScheduleConfigDAO cfgDao = new ScheduleConfigDAO();
+                    ScheduleConfig cfg = cfgDao.loadConfig();
+                    cfg.setEnforceZeroVolunteerWeekends(enforceZeroVol);
+                    cfgDao.saveConfig(cfg);
+                } catch (Exception ex) {
+                    Platform.runLater(() -> csLogLine("⚠ Could not save zero-volunteer setting: " + ex.getMessage()));
+                }
                 cpSatEngine = new CpSatSchedulerEngine();
                 int t0 = tier0Spinner.getValue();
                 int t1 = tier1Spinner.getValue();

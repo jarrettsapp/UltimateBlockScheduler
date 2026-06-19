@@ -103,6 +103,57 @@ public class ConstraintBuilder {
         }
     }
 
+    // ── 1c. Zero-volunteer-weekend hard floor (optional, config-gated) ─────
+
+    /**
+     * Enforces a HARD floor of zero volunteer weekends: every weekend (the back-end of
+     * half-block b, for b in 0..totalBlocks-2) must have at least one eligible categorical
+     * Sunday-Y7 coverer. A resident covers weekend b iff they are non-heavy at slot b AND
+     * non-heavy at slot b+1 (entering-heavy pre-lock); since every non-heavy rotation is a
+     * Sunday source, "non-heavy at both slots" is exactly the eligibility rule.
+     *
+     * <p>Gated by {@link ScheduleConfig#isEnforceZeroVolunteerWeekends()} — a no-op when off.
+     * Proven feasible with the full heavy load + capacity caps. The set of heavy rotation ids
+     * is resolved by the program's authoritative tier list (by name), not rotation_type.
+     */
+    public void applyZeroVolunteerFloor(List<Resident> residents, List<Rotation> rotations) {
+        if (!config.isEnforceZeroVolunteerWeekends()) return;
+
+        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
+            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
+        Set<Integer> heavyIds = rotations.stream()
+            .filter(r -> heavyNames.contains(r.getName()))
+            .map(Rotation::getId).collect(Collectors.toSet());
+        if (heavyIds.isEmpty()) return;
+
+        for (int b = 0; b + 1 < totalBlocks; b++) {
+            List<BoolVar> coverers = new ArrayList<>();
+            for (Resident r : residents) {
+                List<BoolVar> hB = new ArrayList<>(), hB1 = new ArrayList<>();
+                for (int hid : heavyIds) {
+                    BoolVar oB = vars.getOccupancyVar(r.getId(), hid, b);
+                    if (oB != null) hB.add(oB);
+                    BoolVar oB1 = vars.getOccupancyVar(r.getId(), hid, b + 1);
+                    if (oB1 != null) hB1.add(oB1);
+                }
+                // cover = 1 iff non-heavy at b AND non-heavy at b+1.
+                BoolVar cover = model.newBoolVar(String.format("zvf_cov_r%d_b%d", r.getId(), b));
+                model.addLessOrEqual(
+                    LinearExpr.newBuilder().add(cover).addSum(hB.toArray(new BoolVar[0])).build(), 1);
+                model.addLessOrEqual(
+                    LinearExpr.newBuilder().add(cover).addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(cover)
+                        .addSum(hB.toArray(new BoolVar[0]))
+                        .addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                coverers.add(cover);
+            }
+            // At least one coverer this weekend (the hard floor).
+            if (!coverers.isEmpty())
+                model.addGreaterOrEqual(LinearExpr.sum(coverers.toArray(new BoolVar[0])), 1);
+        }
+    }
+
     // ── 2. PGY-level block caps per rotation ──────────────────────────────
 
     public void applyPgyCapConstraints(List<Resident> residents, List<Rotation> rotations) {

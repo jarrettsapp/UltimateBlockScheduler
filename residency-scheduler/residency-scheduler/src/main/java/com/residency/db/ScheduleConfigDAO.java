@@ -48,6 +48,7 @@ public class ScheduleConfigDAO extends BaseDAO {
         upsertKey("discouraged_after_trigger_ids", joinIds(cfg.getDiscouragedAfterTriggerIds()));
         upsertKey("weight_sunday_coverage",  String.valueOf(cfg.getWeightSundayCoverage()));
         upsertKey("sunday_coverage_target",  String.valueOf(cfg.getSundayCoverageTarget()));
+        upsertKey("enforce_zero_volunteer_weekends", String.valueOf(cfg.isEnforceZeroVolunteerWeekends()));
         upsertKey("heavy_rotation_ids",      joinIds(cfg.getHeavyRotationIds()));
         upsertKey("sunday_source_rotation_ids", joinIds(cfg.getSundaySourceRotationIds()));
         upsertKey("global_max_workload",    String.valueOf(cfg.getGlobalMaxWorkloadBlocks() * 2)); // DB stores in weeks
@@ -192,6 +193,7 @@ public class ScheduleConfigDAO extends BaseDAO {
                 case "discouraged_after_trigger_ids" -> cfg.setDiscouragedAfterTriggerIds(parseIds(value));
                 case "weight_sunday_coverage"  -> cfg.setWeightSundayCoverage(Integer.parseInt(value));
                 case "sunday_coverage_target"  -> cfg.setSundayCoverageTarget(Integer.parseInt(value));
+                case "enforce_zero_volunteer_weekends" -> cfg.setEnforceZeroVolunteerWeekends(Boolean.parseBoolean(value));
                 case "heavy_rotation_ids"      -> cfg.setHeavyRotationIds(parseIds(value));
                 case "sunday_source_rotation_ids" -> cfg.setSundaySourceRotationIds(parseIds(value));
                 case "global_max_workload"   -> cfg.setGlobalMaxWorkloadBlocks(Math.max(1, Integer.parseInt(value) / 2)); // DB stored in weeks

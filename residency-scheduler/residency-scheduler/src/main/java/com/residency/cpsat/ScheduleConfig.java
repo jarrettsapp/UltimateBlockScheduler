@@ -36,6 +36,15 @@ public class ScheduleConfig {
     private int weightSundayCoverage = 0;
     /** Target number of eligible Sunday coverers per weekend; shortfall below this is penalized. */
     private int sundayCoverageTarget = 2;
+    /**
+     * When true, the solver enforces a HARD floor of ZERO volunteer weekends — every weekend
+     * must have at least one eligible categorical Sunday-Y7 coverer (on a Sunday-source
+     * rotation, not heavy that block, not entering heavy the next block). Proven achievable
+     * (see SCHEDULE_VERSIONING_PLAN / coverage-floor analysis: 0 volunteers is feasible with
+     * the full heavy load and capacity caps). Default OFF — flip on to eliminate the volunteer
+     * fallback entirely; flip off to revert if the transition tradeoff isn't worth it.
+     */
+    private boolean enforceZeroVolunteerWeekends = false;
 
     // ── Global staffing caps (in blocks) ──────────────────────────────────
     private int globalMaxWorkloadBlocks = 24;
@@ -177,6 +186,9 @@ public class ScheduleConfig {
 
     public int getSundayCoverageTarget()             { return sundayCoverageTarget; }
     public void setSundayCoverageTarget(int v)       { this.sundayCoverageTarget = v; }
+
+    public boolean isEnforceZeroVolunteerWeekends()        { return enforceZeroVolunteerWeekends; }
+    public void setEnforceZeroVolunteerWeekends(boolean v) { this.enforceZeroVolunteerWeekends = v; }
 
     public Set<Integer> getHeavyRotationIds()        { return heavyRotationIds; }
     public void setHeavyRotationIds(Set<Integer> v)  { this.heavyRotationIds = v; }
