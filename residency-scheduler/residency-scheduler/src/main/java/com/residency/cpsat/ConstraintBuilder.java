@@ -591,4 +591,96 @@ public class ConstraintBuilder {
             }
         }
     }
+
+    // ── Max consecutive heavy+medium weeks (categorical residents only) ────
+
+    /**
+     * Limits how many consecutive weeks a categorical resident may spend in
+     * combined heavy + medium rotations without a light-rotation break.
+     *
+     * Uses a sliding window of {@code limitSlots} half-blocks: for every
+     * window of that width, the sum of heavy/medium indicators must be ≤
+     * {@code limitSlots - 1} (i.e. at least one light slot in every window).
+     *
+     * In HARD mode this is posted as a constraint. In SOFT mode it returns a
+     * list of per-window violation BoolVars that the caller can fold into the
+     * Phase-3 objective; the method itself posts nothing when soft.
+     *
+     * Applies only to categorical residents (non-auxiliary, non-BMC).
+     *
+     * @return list of window-violation BoolVars (non-empty only in soft mode)
+     */
+    public List<BoolVar> applyMaxConsecHeavyMedium(List<Resident> residents,
+                                                    List<Rotation> rotations) {
+        int limitWeeks = config.getMaxConsecutiveHeavyMediumWeeks();
+        if (limitWeeks <= 0) return List.of();
+
+        // Convert weeks to 2-week slots; require at least 1 light slot per window
+        // so the window size must be > 1 slot (i.e. limit must be > 2 weeks).
+        int limitSlots = limitWeeks / 2;
+        if (limitSlots <= 1) return List.of(); // limit of 2wk or less is always met
+
+        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
+            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
+        Set<String> mediumNames = Set.of("Inpatient GI", "Infectious Disease");
+
+        Set<Integer> hmIds = rotations.stream()
+            .filter(r -> heavyNames.contains(r.getName()) || mediumNames.contains(r.getName()))
+            .map(Rotation::getId).collect(Collectors.toSet());
+        if (hmIds.isEmpty()) return List.of();
+
+        // Only categorical residents (not auxiliary, not BMC group).
+        List<Resident> cats = residents.stream()
+            .filter(r -> !r.isAuxiliary()
+                      && !"BMC".equals(r.getResidentGroup()))
+            .collect(Collectors.toList());
+
+        boolean isHard = config.isMaxConsecHeavyMediumHard();
+        List<BoolVar> softViolations = new ArrayList<>();
+
+        for (Resident r : cats) {
+            // Build a per-slot heavy/medium indicator BoolVar.
+            BoolVar[] hm = new BoolVar[totalBlocks];
+            for (int b = 0; b < totalBlocks; b++) {
+                List<BoolVar> occs = new ArrayList<>();
+                for (int id : hmIds) {
+                    BoolVar o = vars.getOccupancyVar(r.getId(), id, b);
+                    if (o != null) occs.add(o);
+                }
+                BoolVar hmB = model.newBoolVar("hm_r" + r.getId() + "_b" + b);
+                if (occs.isEmpty()) {
+                    model.addEquality(hmB, 0);
+                } else {
+                    // hmB = OR of occs (mutually exclusive occupancy vars)
+                    model.addGreaterOrEqual(LinearExpr.sum(occs.toArray(new BoolVar[0])), hmB);
+                    for (BoolVar o : occs) model.addLessOrEqual(o, hmB);
+                }
+                hm[b] = hmB;
+            }
+
+            // Sliding window of limitSlots: sum(hm[b..b+limitSlots-1]) <= limitSlots-1
+            for (int b = 0; b + limitSlots <= totalBlocks; b++) {
+                BoolVar[] window = new BoolVar[limitSlots];
+                for (int k = 0; k < limitSlots; k++) window[k] = hm[b + k];
+                LinearExpr windowSum = LinearExpr.sum(window);
+
+                if (isHard) {
+                    model.addLinearConstraint(windowSum, 0, limitSlots - 1);
+                } else {
+                    // Soft: create a violation indicator = 1 iff all slots in window are H/M.
+                    BoolVar viol = model.newBoolVar(
+                        String.format("hmviol_r%d_b%d", r.getId(), b));
+                    // viol <= each hm[b+k]  (viol can only be 1 if all are 1)
+                    for (BoolVar w : window) model.addLessOrEqual(viol, w);
+                    // viol >= sum(window) - (limitSlots-1)  (forced to 1 when all are H/M)
+                    model.addGreaterOrEqual(
+                        LinearExpr.newBuilder().add(viol).add(limitSlots - 1).build(),
+                        windowSum);
+                    softViolations.add(viol);
+                }
+            }
+        }
+
+        return softViolations;
+    }
 }

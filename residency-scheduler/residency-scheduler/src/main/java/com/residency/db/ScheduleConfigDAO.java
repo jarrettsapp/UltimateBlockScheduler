@@ -49,6 +49,9 @@ public class ScheduleConfigDAO extends BaseDAO {
         upsertKey("weight_sunday_coverage",  String.valueOf(cfg.getWeightSundayCoverage()));
         upsertKey("sunday_coverage_target",  String.valueOf(cfg.getSundayCoverageTarget()));
         upsertKey("enforce_zero_volunteer_weekends", String.valueOf(cfg.isEnforceZeroVolunteerWeekends()));
+        upsertKey("max_consec_heavy_medium_weeks",  String.valueOf(cfg.getMaxConsecutiveHeavyMediumWeeks()));
+        upsertKey("max_consec_heavy_medium_hard",   String.valueOf(cfg.isMaxConsecHeavyMediumHard()));
+        upsertKey("weight_max_consec_heavy_medium", String.valueOf(cfg.getWeightMaxConsecHeavyMedium()));
         upsertKey("heavy_rotation_ids",      joinIds(cfg.getHeavyRotationIds()));
         upsertKey("sunday_source_rotation_ids", joinIds(cfg.getSundaySourceRotationIds()));
         upsertKey("global_max_workload",    String.valueOf(cfg.getGlobalMaxWorkloadBlocks() * 2)); // DB stores in weeks
@@ -194,6 +197,9 @@ public class ScheduleConfigDAO extends BaseDAO {
                 case "weight_sunday_coverage"  -> cfg.setWeightSundayCoverage(Integer.parseInt(value));
                 case "sunday_coverage_target"  -> cfg.setSundayCoverageTarget(Integer.parseInt(value));
                 case "enforce_zero_volunteer_weekends" -> cfg.setEnforceZeroVolunteerWeekends(Boolean.parseBoolean(value));
+                case "max_consec_heavy_medium_weeks"  -> cfg.setMaxConsecutiveHeavyMediumWeeks(Integer.parseInt(value));
+                case "max_consec_heavy_medium_hard"   -> cfg.setMaxConsecHeavyMediumHard(Boolean.parseBoolean(value));
+                case "weight_max_consec_heavy_medium" -> cfg.setWeightMaxConsecHeavyMedium(Integer.parseInt(value));
                 case "heavy_rotation_ids"      -> cfg.setHeavyRotationIds(parseIds(value));
                 case "sunday_source_rotation_ids" -> cfg.setSundaySourceRotationIds(parseIds(value));
                 case "global_max_workload"   -> cfg.setGlobalMaxWorkloadBlocks(Math.max(1, Integer.parseInt(value) / 2)); // DB stored in weeks

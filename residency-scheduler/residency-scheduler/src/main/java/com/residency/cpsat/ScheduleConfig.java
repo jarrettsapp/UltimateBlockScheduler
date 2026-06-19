@@ -46,6 +46,24 @@ public class ScheduleConfig {
      */
     private boolean enforceZeroVolunteerWeekends = false;
 
+    /**
+     * Maximum number of consecutive weeks (combining heavy + medium tiers) a categorical
+     * resident may be assigned without a light-rotation break.
+     * 0 = disabled.  Typical values: 4 / 6 / 8 / 10.
+     * Applies to categorical residents only (is_auxiliary = false, resident_group != BMC).
+     */
+    private int maxConsecutiveHeavyMediumWeeks = 8;
+
+    /**
+     * When true the limit above is a HARD constraint (solver must obey).
+     * When false it is a soft penalty folded into the Phase-3 objective
+     * (each over-limit window slot costs {@code weightMaxConsecHeavyMedium} units).
+     */
+    private boolean maxConsecHeavyMediumHard = true;
+
+    /** Penalty per over-limit window slot when running in soft mode. */
+    private int weightMaxConsecHeavyMedium = 20;
+
     // ── Global staffing caps (in blocks) ──────────────────────────────────
     private int globalMaxWorkloadBlocks = 24;
     private int globalMinWorkloadBlocks = 0;
@@ -189,6 +207,15 @@ public class ScheduleConfig {
 
     public boolean isEnforceZeroVolunteerWeekends()        { return enforceZeroVolunteerWeekends; }
     public void setEnforceZeroVolunteerWeekends(boolean v) { this.enforceZeroVolunteerWeekends = v; }
+
+    public int getMaxConsecutiveHeavyMediumWeeks()         { return maxConsecutiveHeavyMediumWeeks; }
+    public void setMaxConsecutiveHeavyMediumWeeks(int v)   { this.maxConsecutiveHeavyMediumWeeks = v; }
+
+    public boolean isMaxConsecHeavyMediumHard()            { return maxConsecHeavyMediumHard; }
+    public void setMaxConsecHeavyMediumHard(boolean v)     { this.maxConsecHeavyMediumHard = v; }
+
+    public int getWeightMaxConsecHeavyMedium()             { return weightMaxConsecHeavyMedium; }
+    public void setWeightMaxConsecHeavyMedium(int v)       { this.weightMaxConsecHeavyMedium = v; }
 
     public Set<Integer> getHeavyRotationIds()        { return heavyRotationIds; }
     public void setHeavyRotationIds(Set<Integer> v)  { this.heavyRotationIds = v; }

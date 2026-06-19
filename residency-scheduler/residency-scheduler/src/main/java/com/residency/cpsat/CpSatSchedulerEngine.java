@@ -195,6 +195,7 @@ public class CpSatSchedulerEngine {
             new ConstraintStep("Mutual non-adjacency",            cb -> cb.applyMutualNonAdjacencyConstraints(residents, rotations)),
             new ConstraintStep("Require break between segments",  cb -> cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations)),
             new ConstraintStep("Max consecutive blocks",          cb -> cb.applyMaxConsecutiveBlocksConstraints(residents, rotations)),
+            new ConstraintStep("Max consec heavy+medium run",     cb -> cb.applyMaxConsecHeavyMedium(residents, rotations)),
             new ConstraintStep("Earliest start block",            cb -> cb.applyEarliestStartConstraints(residents, rotations)),
             new ConstraintStep("Even block start",                cb -> cb.applyEvenBlockStartConstraints(residents, rotations)),
             new ConstraintStep("Rotation link rules",             cb -> cb.applyRotationLinkConstraints(residents, rotations)),
@@ -688,17 +689,25 @@ public class CpSatSchedulerEngine {
         if (bestTier2 < Long.MAX_VALUE) mc3.model().addLessOrEqual(tier2Lock3, bestTier2);
 
         IntVar patternCost = obj3.buildPatternObjective(residents, rotations);
-        // Fold the Sunday weekend-coverage shortfall into the Phase-3 objective. Both are
-        // Tier-3 soft nudges that run with Tier-1 (clinical) and Tier-2 (coverage/variance)
-        // locked ≤ best, so this can only break ties within the already-optimal frontier —
-        // it cannot degrade clinical or coverage quality. Disabled (zero) unless
-        // weight_sunday_coverage and the heavy/source tier lists are configured.
+        // Sunday coverage shortfall: penalises weekends below the coverer target.
+        // Disabled (zero weight or missing tier lists) unless configured.
         IntVar sundayShortfall = obj3.buildSundayCoverageObjective(residents);
-        mc3.model().minimize(
-            LinearExpr.newBuilder()
-                .add(patternCost)
-                .addTerm(sundayShortfall, config.getWeightSundayCoverage())
-                .build());
+        // Max-consec heavy+medium soft violations: each over-limit window slot costs
+        // weightMaxConsecHeavyMedium. Empty list when disabled or in hard mode.
+        ConstraintBuilder cb3 = new ConstraintBuilder(
+            mc3.model(), mc3.varFactory(), config, totalBlocks, auxCoverage);
+        List<com.google.ortools.sat.BoolVar> hmViolations =
+            !config.isMaxConsecHeavyMediumHard()
+                ? cb3.applyMaxConsecHeavyMedium(residents, rotations)
+                : List.of();
+        LinearExpr.Builder obj3Expr = LinearExpr.newBuilder()
+            .add(patternCost)
+            .addTerm(sundayShortfall, config.getWeightSundayCoverage());
+        if (!hmViolations.isEmpty()) {
+            int wHM = config.getWeightMaxConsecHeavyMedium();
+            for (var v : hmViolations) obj3Expr.addTerm(v, wHM);
+        }
+        mc3.model().minimize(obj3Expr.build());
 
         CpSolver solver3 = configureSolver(config, tier3LimitSec);
         activeSolver = solver3;

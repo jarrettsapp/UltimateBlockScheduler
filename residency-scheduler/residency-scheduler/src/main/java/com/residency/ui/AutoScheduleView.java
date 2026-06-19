@@ -64,7 +64,12 @@ public class AutoScheduleView extends BorderPane {
     private final Button             stopBtn        = new Button("⏹  Stop & Commit");
     private final Button             undoBtn        = new Button("↩  Undo");
     private final Button             versionsBtn    = new Button("🗂  Versions…");
-    private final CheckBox           zeroVolunteerCheck = new CheckBox("Require 0 volunteer weekends (hard)");
+    private final CheckBox           zeroVolunteerCheck  = new CheckBox("Require 0 volunteer weekends (hard)");
+    private final Spinner<Integer>   hmLimitSpinner      = new Spinner<>(0, 26, 8, 2);
+    private final Button             hmModeBtn           = new Button("Hard");
+    private final CheckBox           sundayCoverageCheck = new CheckBox("Sunday coverage soft weight:");
+    // Set during buildCpSatPanel(); read in doStart() to persist the weight before solve.
+    private Spinner<Integer>         sundayWeightSpinnerRef = null;
 
     // Timefold panel widgets
     private final Label  tfScore    = new Label("—");
@@ -285,10 +290,69 @@ public class AutoScheduleView extends BorderPane {
             "When ON, the solver HARD-requires every weekend to have an eligible Y7 Sunday "
             + "coverer (zero volunteer weekends). Proven feasible. May worsen transitions — "
             + "uncheck to revert. Saved to config on solve."));
-        try { zeroVolunteerCheck.setSelected(new ScheduleConfigDAO().loadConfig().isEnforceZeroVolunteerWeekends()); }
-        catch (Exception ignore) {}
+
+        // Max consecutive heavy+medium run control.
+        hmLimitSpinner.setPrefWidth(58);
+        hmLimitSpinner.setEditable(true);
+        hmLimitSpinner.setStyle("-fx-font-size:10px;");
+        hmLimitSpinner.setTooltip(new Tooltip(
+            "Max consecutive weeks of combined heavy+medium rotations per categorical resident.\n"
+            + "0 = disabled. Hard mode = solver must obey. Soft mode = penalty per violation.\n"
+            + "Applies only to categorical residents (not TY/BMC)."));
+        hmModeBtn.setStyle("-fx-font-size:10px;-fx-padding:2 6;");
+        hmModeBtn.setTooltip(new Tooltip("Toggle between Hard constraint and Soft penalty."));
+        hmModeBtn.setOnAction(e -> {
+            boolean nowHard = hmModeBtn.getText().equals("Hard");
+            hmModeBtn.setText(nowHard ? "Soft" : "Hard");
+            hmModeBtn.setStyle(nowHard
+                ? "-fx-font-size:10px;-fx-padding:2 6;-fx-background-color:#8b6010;-fx-text-fill:white;"
+                : "-fx-font-size:10px;-fx-padding:2 6;");
+        });
+
+        // Sunday coverage soft weight control.
+        Spinner<Integer> sundayWeightSpinner = new Spinner<>(0, 200, 10, 5);
+        sundayWeightSpinner.setPrefWidth(58);
+        sundayWeightSpinner.setEditable(true);
+        sundayWeightSpinner.setStyle("-fx-font-size:10px;");
+        sundayWeightSpinner.setTooltip(new Tooltip(
+            "Weight per fragile-weekend shortfall in the Phase-3 objective.\n"
+            + "Each weekend below the 2-coverer target costs this many units.\n"
+            + "0 = disabled. Competes with pattern cost (each pattern violation = 1 unit)."));
+        sundayCoverageCheck.setStyle("-fx-font-size:10px;");
+        sundayCoverageCheck.setTooltip(new Tooltip(
+            "When ON, Phase-3 softly penalises weekends with fewer than 2 eligible Sunday\n"
+            + "coverers, nudging the solver toward healthy (≥2) weekends. Does not override\n"
+            + "the zero-volunteer hard floor."));
+
+        try {
+            ScheduleConfig initCfg = new ScheduleConfigDAO().loadConfig();
+            zeroVolunteerCheck.setSelected(initCfg.isEnforceZeroVolunteerWeekends());
+            int initLimit = initCfg.getMaxConsecutiveHeavyMediumWeeks();
+            hmLimitSpinner.getValueFactory().setValue(initLimit);
+            boolean initHard = initCfg.isMaxConsecHeavyMediumHard();
+            hmModeBtn.setText(initHard ? "Hard" : "Soft");
+            if (!initHard) hmModeBtn.setStyle(
+                "-fx-font-size:10px;-fx-padding:2 6;-fx-background-color:#8b6010;-fx-text-fill:white;");
+            int initSunWt = initCfg.getWeightSundayCoverage();
+            sundayCoverageCheck.setSelected(initSunWt > 0);
+            sundayWeightSpinner.getValueFactory().setValue(Math.max(1, initSunWt));
+        } catch (Exception ignore) {}
+
+        sundayWeightSpinner.setDisable(!sundayCoverageCheck.isSelected());
+        sundayCoverageCheck.selectedProperty().addListener(
+            (obs, old, sel) -> sundayWeightSpinner.setDisable(!sel));
+
+        // Store spinner reference so doStart() can read it.
+        this.sundayWeightSpinnerRef = sundayWeightSpinner;
+
         HBox floorBox = new HBox(6, zeroVolunteerCheck);
         floorBox.setAlignment(Pos.CENTER_LEFT);
+        HBox hmRunBox = new HBox(6,
+            new Label("Max consec H+M run:"), hmLimitSpinner, new Label("wk"), hmModeBtn);
+        hmRunBox.setAlignment(Pos.CENTER_LEFT);
+        hmRunBox.setStyle("-fx-font-size:10px;");
+        HBox sundayBox = new HBox(6, sundayCoverageCheck, sundayWeightSpinner, new Label("pts/wknd"));
+        sundayBox.setAlignment(Pos.CENTER_LEFT);
 
         HBox timeLimits = new HBox(8,
             new Label("Phase limits (s):"),
@@ -300,7 +364,7 @@ public class AutoScheduleView extends BorderPane {
         timeLimits.setAlignment(Pos.CENTER_LEFT);
         timeLimits.setPadding(new Insets(4, 0, 4, 0));
         timeLimits.setStyle("-fx-font-size:10px;");
-        VBox limitsBox = new VBox(2, timeLimits, presets, floorBox);
+        VBox limitsBox = new VBox(2, timeLimits, presets, floorBox, hmRunBox, sundayBox);
 
         // Score progress history panel
         Label progressHeader = new Label("  Time       Elapsed    Backtracks   Branches     Objective");
@@ -535,18 +599,25 @@ public class AutoScheduleView extends BorderPane {
         poller.setDaemon(true);
         poller.start();
 
-        final boolean enforceZeroVol = zeroVolunteerCheck.isSelected();
+        final boolean enforceZeroVol  = zeroVolunteerCheck.isSelected();
+        final int     hmLimitWks      = hmLimitSpinner.getValue();
+        final boolean hmHard          = "Hard".equals(hmModeBtn.getText());
+        final boolean sunCovOn        = sundayCoverageCheck.isSelected();
+        final int     sunCovWeight    = (sundayWeightSpinnerRef != null && sunCovOn)
+                                            ? sundayWeightSpinnerRef.getValue() : 0;
         Thread worker = new Thread(() -> {
             try {
-                // Persist the zero-volunteer-floor toggle so the engine (which loads config
-                // from the DB) honours it for this solve.
+                // Persist UI toggles so the engine (which loads config from DB) honours them.
                 try {
                     ScheduleConfigDAO cfgDao = new ScheduleConfigDAO();
                     ScheduleConfig cfg = cfgDao.loadConfig();
                     cfg.setEnforceZeroVolunteerWeekends(enforceZeroVol);
+                    cfg.setMaxConsecutiveHeavyMediumWeeks(hmLimitWks);
+                    cfg.setMaxConsecHeavyMediumHard(hmHard);
+                    cfg.setWeightSundayCoverage(sunCovWeight);
                     cfgDao.saveConfig(cfg);
                 } catch (Exception ex) {
-                    Platform.runLater(() -> csLogLine("⚠ Could not save zero-volunteer setting: " + ex.getMessage()));
+                    Platform.runLater(() -> csLogLine("⚠ Could not save solver settings: " + ex.getMessage()));
                 }
                 cpSatEngine = new CpSatSchedulerEngine();
                 int t0 = tier0Spinner.getValue();
