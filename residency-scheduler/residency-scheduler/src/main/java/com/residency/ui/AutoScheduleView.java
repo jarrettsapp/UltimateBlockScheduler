@@ -96,12 +96,12 @@ public class AutoScheduleView extends BorderPane {
     private final VBox   csProgressRows = new VBox(2);
     private volatile boolean csSolving = false;
 
-    // Per-phase time limits (seconds; 0 = unlimited). Max raised to 7200 (2 hr/phase) so
+    // Per-phase time limits (seconds; 0 = unlimited). Max raised to 14400 (4 hr/phase) so
     // long overnight solves can be configured from the UI. See the preset buttons below.
-    private final Spinner<Integer> tier0Spinner = new Spinner<>(0, 7200, 60,  15);
-    private final Spinner<Integer> tier1Spinner = new Spinner<>(0, 7200, 120, 30);
-    private final Spinner<Integer> tier2Spinner = new Spinner<>(0, 7200, 120, 30);
-    private final Spinner<Integer> tier3Spinner = new Spinner<>(0, 7200, 60,  15);
+    private final Spinner<Integer> tier0Spinner = new Spinner<>(0, 14400, 60,  15);
+    private final Spinner<Integer> tier1Spinner = new Spinner<>(0, 14400, 120, 30);
+    private final Spinner<Integer> tier2Spinner = new Spinner<>(0, 14400, 120, 30);
+    private final Spinner<Integer> tier3Spinner = new Spinner<>(0, 14400, 60,  15);
     private VBox feasibilityContent;
     private TitledPane feasibilityPane;
 
