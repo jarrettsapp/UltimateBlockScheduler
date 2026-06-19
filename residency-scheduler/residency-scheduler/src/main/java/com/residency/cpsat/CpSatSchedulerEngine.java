@@ -700,7 +700,7 @@ public class CpSatSchedulerEngine {
             !config.isMaxConsecHeavyMediumHard()
                 ? cb3.applyMaxConsecHeavyMedium(residents, rotations)
                 : List.of();
-        LinearExpr.Builder obj3Expr = LinearExpr.newBuilder()
+        LinearExprBuilder obj3Expr = LinearExpr.newBuilder()
             .add(patternCost)
             .addTerm(sundayShortfall, config.getWeightSundayCoverage());
         if (!hmViolations.isEmpty()) {
