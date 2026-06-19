@@ -1,6 +1,7 @@
 package com.residency.db;
 
 import com.residency.cpsat.ScheduleConfig;
+import com.residency.model.ScheduleUnits;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -45,6 +46,11 @@ public class ScheduleConfigDAO extends BaseDAO {
         upsertKey("post_call_trigger_ids",   joinIds(cfg.getPostCallTriggerRotationIds()));
         upsertKey("mandatory_attendance_ids",joinIds(cfg.getMandatoryAttendanceRotationIds()));
         upsertKey("discouraged_after_trigger_ids", joinIds(cfg.getDiscouragedAfterTriggerIds()));
+        upsertKey("weight_sunday_coverage",  String.valueOf(cfg.getWeightSundayCoverage()));
+        upsertKey("sunday_coverage_target",  String.valueOf(cfg.getSundayCoverageTarget()));
+        upsertKey("enforce_zero_volunteer_weekends", String.valueOf(cfg.isEnforceZeroVolunteerWeekends()));
+        upsertKey("heavy_rotation_ids",      joinIds(cfg.getHeavyRotationIds()));
+        upsertKey("sunday_source_rotation_ids", joinIds(cfg.getSundaySourceRotationIds()));
         upsertKey("global_max_workload",    String.valueOf(cfg.getGlobalMaxWorkloadBlocks() * 2)); // DB stores in weeks
         upsertKey("global_min_workload",    String.valueOf(cfg.getGlobalMinWorkloadBlocks() * 2));
         upsertKey("cpsat_time_limit",       String.valueOf(cfg.getCpSatTimeLimitSeconds()));
@@ -68,17 +74,18 @@ public class ScheduleConfigDAO extends BaseDAO {
     }
 
     public void saveRotationPolicy(ScheduleConfig.RotationPolicy policy) throws SQLException {
-        // Convert block lengths back to weeks for the DB column (×2).
+        // allowedBlockLengths is held in 2-week slots in memory; the DB column is in
+        // weeks. Convert slots -> weeks for storage. See ScheduleUnits / REVIEW.md M2.
         String lengths = Arrays.stream(policy.allowedBlockLengths)
-            .mapToObj(l -> String.valueOf(l * 2)).collect(Collectors.joining(","));
+            .mapToObj(l -> String.valueOf(ScheduleUnits.slotsToWeeks(l))).collect(Collectors.joining(","));
         String sql = """
             INSERT INTO rotation_config
                 (rotation_id, allowed_block_lengths, requires_consecutive,
                  min_per_week, max_per_week, optional_full_year,
                  no_back_to_back_half_blocks, require_break_between_segments,
                  mutually_non_adjacent_with, max_consecutive_weeks, earliest_start_block,
-                 require_even_block_start)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 require_even_block_start, categorical_max_per_block)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(rotation_id) DO UPDATE SET
                 allowed_block_lengths=excluded.allowed_block_lengths,
                 requires_consecutive=excluded.requires_consecutive,
@@ -90,7 +97,8 @@ public class ScheduleConfigDAO extends BaseDAO {
                 mutually_non_adjacent_with=excluded.mutually_non_adjacent_with,
                 max_consecutive_weeks=excluded.max_consecutive_weeks,
                 earliest_start_block=excluded.earliest_start_block,
-                require_even_block_start=excluded.require_even_block_start
+                require_even_block_start=excluded.require_even_block_start,
+                categorical_max_per_block=excluded.categorical_max_per_block
             """;
         try (PreparedStatement ps = getConn().prepareStatement(sql)) {
             ps.setInt(1, policy.rotationId);
@@ -106,6 +114,7 @@ public class ScheduleConfigDAO extends BaseDAO {
             ps.setInt(10, policy.maxConsecutiveBlocks * 2); // DB stores in weeks
             ps.setInt(11, policy.earliestStartBlock);
             ps.setInt(12, policy.requireEvenBlockStart ? 1 : 0);
+            ps.setInt(13, policy.categoricalMaxPerBlock);
             ps.executeUpdate();
         }
         // Save PGY caps
@@ -182,6 +191,11 @@ public class ScheduleConfigDAO extends BaseDAO {
                 case "post_call_trigger_ids"  -> cfg.setPostCallTriggerRotationIds(parseIds(value));
                 case "mandatory_attendance_ids" -> cfg.setMandatoryAttendanceRotationIds(parseIds(value));
                 case "discouraged_after_trigger_ids" -> cfg.setDiscouragedAfterTriggerIds(parseIds(value));
+                case "weight_sunday_coverage"  -> cfg.setWeightSundayCoverage(Integer.parseInt(value));
+                case "sunday_coverage_target"  -> cfg.setSundayCoverageTarget(Integer.parseInt(value));
+                case "enforce_zero_volunteer_weekends" -> cfg.setEnforceZeroVolunteerWeekends(Boolean.parseBoolean(value));
+                case "heavy_rotation_ids"      -> cfg.setHeavyRotationIds(parseIds(value));
+                case "sunday_source_rotation_ids" -> cfg.setSundaySourceRotationIds(parseIds(value));
                 case "global_max_workload"   -> cfg.setGlobalMaxWorkloadBlocks(Math.max(1, Integer.parseInt(value) / 2)); // DB stored in weeks
                 case "global_min_workload"   -> cfg.setGlobalMinWorkloadBlocks(Integer.parseInt(value) / 2);
                 case "cpsat_time_limit"      -> cfg.setCpSatTimeLimitSeconds(Integer.parseInt(value));
@@ -230,9 +244,9 @@ public class ScheduleConfigDAO extends BaseDAO {
     private ScheduleConfig.RotationPolicy mapPolicy(ResultSet rs) throws SQLException {
         ScheduleConfig.RotationPolicy p = new ScheduleConfig.RotationPolicy(rs.getInt("rotation_id"));
         String[] lengths = rs.getString("allowed_block_lengths").split(",");
-        // DB stores lengths in weeks; convert to blocks (÷2, min 1).
+        // DB stores lengths in weeks; convert to 2-week slots (min 1 slot).
         p.allowedBlockLengths = Arrays.stream(lengths)
-            .mapToInt(s -> Math.max(1, Integer.parseInt(s.trim()) / 2)).toArray();
+            .mapToInt(s -> Math.max(1, ScheduleUnits.weeksToSlots(Integer.parseInt(s.trim())))).toArray();
         p.requiresConsecutive         = rs.getInt("requires_consecutive") == 1;
         p.minPerBlock                 = rs.getInt("min_per_week");   // column still named min_per_week in DB
         p.maxPerBlock                 = rs.getInt("max_per_week");
@@ -252,6 +266,8 @@ public class ScheduleConfigDAO extends BaseDAO {
         try { p.earliestStartBlock = rs.getInt("earliest_start_block"); }
         catch (SQLException ignored) {}
         try { p.requireEvenBlockStart = rs.getInt("require_even_block_start") == 1; }
+        catch (SQLException ignored) {}
+        try { p.categoricalMaxPerBlock = rs.getInt("categorical_max_per_block"); }
         catch (SQLException ignored) {}
         return p;
     }

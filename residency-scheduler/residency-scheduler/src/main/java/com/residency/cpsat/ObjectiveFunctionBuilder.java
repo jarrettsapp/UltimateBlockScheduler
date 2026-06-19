@@ -21,16 +21,29 @@ public class ObjectiveFunctionBuilder {
     private final VariableFactory vars;
     private final ScheduleConfig config;
     private final int totalBlocks;
+    // Pre-counted auxiliary-resident coverage: rotationId -> blockIndex -> count.
+    // The coverage objective subtracts this from min/max so it matches the hard
+    // coverage constraint, which already credits aux coverage (REVIEW: the
+    // undercoverage objective previously ignored aux and penalised blocks that
+    // were fully staffed by ancillary residents).
+    private final Map<Integer, Map<Integer, Integer>> auxCoverage;
 
     private final Map<String, IntVar> undercoverageVars = new LinkedHashMap<>();
     private final Map<String, IntVar> overcoverageVars  = new LinkedHashMap<>();
 
     public ObjectiveFunctionBuilder(CpModel model, VariableFactory vars,
                                     ScheduleConfig config, int totalBlocks) {
+        this(model, vars, config, totalBlocks, Map.of());
+    }
+
+    public ObjectiveFunctionBuilder(CpModel model, VariableFactory vars,
+                                    ScheduleConfig config, int totalBlocks,
+                                    Map<Integer, Map<Integer, Integer>> auxCoverage) {
         this.model       = model;
         this.vars        = vars;
         this.config      = config;
         this.totalBlocks = totalBlocks;
+        this.auxCoverage = auxCoverage;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -157,35 +170,41 @@ public class ObjectiveFunctionBuilder {
         List<IntVar>  terms   = new ArrayList<>();
         List<Integer> weights = new ArrayList<>();
 
-        // α: Undercoverage
+        // α: Undercoverage. Credit pre-counted aux coverage the same way the hard
+        // coverage constraint does (effectiveMin = max(0, minPerBlock - auxCount)),
+        // so blocks already staffed by ancillary residents are not penalised.
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
-            int targetMin = policy.minPerBlock;
-            if (targetMin <= 0) continue;
+            if (policy.minPerBlock <= 0) continue;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMin = Math.max(0, policy.minPerBlock - auxByBlock.getOrDefault(b, 0));
+                if (effectiveMin <= 0) continue;
                 List<BoolVar> blockOccs = new ArrayList<>();
                 for (Resident r : residents) {
                     BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
                     if (occ != null) blockOccs.add(occ);
                 }
                 if (blockOccs.isEmpty()) continue;
-                IntVar under = model.newIntVar(0, targetMin,
+                IntVar under = model.newIntVar(0, effectiveMin,
                     String.format("t2_under_s%d_b%d", s.getId(), b));
                 BoolVar[] arr = blockOccs.toArray(new BoolVar[0]);
                 model.addLinearConstraint(
                     LinearExpr.newBuilder().addSum(arr).add(under),
-                    targetMin, residents.size() + targetMin);
+                    effectiveMin, residents.size() + effectiveMin);
                 undercoverageVars.put(s.getId() + "_" + b, under);
                 terms.add(under);
                 weights.add(config.getWeightUndercoverage());
             }
         }
 
-        // β: Overcoverage
+        // β: Overcoverage. Add aux coverage to the headcount so the effective max
+        // matches the hard constraint (effectiveMax = max(0, maxPerBlock - auxCount)).
         for (Rotation s : rotations) {
             ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
-            int targetMax = policy.maxPerBlock;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
             for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMax = Math.max(0, policy.maxPerBlock - auxByBlock.getOrDefault(b, 0));
                 List<BoolVar> blockOccs = new ArrayList<>();
                 for (Resident r : residents) {
                     BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
@@ -197,7 +216,7 @@ public class ObjectiveFunctionBuilder {
                 BoolVar[] arr = blockOccs.toArray(new BoolVar[0]);
                 model.addLinearConstraint(
                     LinearExpr.newBuilder().addSum(arr).addTerm(over, -1),
-                    0, targetMax);
+                    0, effectiveMax);
                 overcoverageVars.put(s.getId() + "_" + b, over);
                 terms.add(over);
                 weights.add(config.getWeightOvercoverage());
@@ -301,9 +320,21 @@ public class ObjectiveFunctionBuilder {
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * Builds the 2+1 block pattern term (2 inpatient blocks, 1 outpatient per cycle).
-     * Returns an IntVar counting the total unweighted pattern violations.
-     * Call model.minimize() on the result (or a weighted version) in the caller.
+     * Builds the 4+2 cadence term: per 3-slot (6-week) cycle, prefer 2 INPATIENT
+     * slots (4 weeks) then 1 OUTPATIENT slot (2 weeks). Inpatient is the heavier
+     * workload the program spreads out, so the cycle is inpatient-heavy.
+     *
+     * Implementation: at cycle positions 0,1 (which "want" inpatient) every
+     * outpatient occupancy is counted as a violation; at position 2 (which "wants"
+     * outpatient) every inpatient occupancy is counted. Minimizing the count
+     * therefore pushes toward 2-inpatient / 1-outpatient per cycle. The caller
+     * minimizes this (weighted by weightFourPlusTwo).
+     *
+     * Known limitation (RULES_REVIEW): the cadence is anchored to the absolute
+     * block index (b % 3), so every resident's preferred phase is aligned rather
+     * than staggered. If staggering matters for call distribution, replace this
+     * with a per-resident max-consecutive-inpatient rule ("option B"). Kept as-is
+     * for now — this is a low-priority Tier-3 nudge and the direction is correct.
      */
     public IntVar buildPatternObjective(List<Resident> residents, List<Rotation> rotations) {
         Set<Integer> inpatientIds = rotations.stream()
@@ -321,11 +352,13 @@ public class ObjectiveFunctionBuilder {
                 for (int b = 0; b < totalBlocks; b++) {
                     int pos = b % 3;
                     if (pos < 2) {
+                        // Positions 0,1 of the cycle want INPATIENT — penalize outpatient here.
                         for (int rotId : outpatientIds) {
                             BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b);
                             if (occ != null) violations.add(occ);
                         }
                     } else {
+                        // Position 2 wants OUTPATIENT — penalize inpatient here.
                         for (int rotId : inpatientIds) {
                             BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b);
                             if (occ != null) violations.add(occ);
@@ -343,6 +376,117 @@ public class ObjectiveFunctionBuilder {
             model.addEquality(patternCost, LinearExpr.sum(violations.toArray(new BoolVar[0])));
         }
         return patternCost;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Tier 3 — Sunday weekend-coverage objective
+    //  Returns an IntVar = Σ shortfall below the per-weekend coverer target.
+    //  Does NOT minimize — the caller folds it into the Phase-3 objective.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Rewards having enough eligible Younker-7 Sunday-night coverers per weekend.
+     *
+     * A "weekend" sits at the boundary of half-block b → b+1 (the trailing Sat+Sun of
+     * block b belongs to block b's rotation). A resident can cover that Sunday iff:
+     *   (1) they are on a Sunday-source rotation at block b (Inpatient GI / ID / any
+     *       light rotation — heavy rotations are call-ineligible for their whole run), AND
+     *   (2) they are NOT entering a heavy rotation at block b+1 (the manually-imposed
+     *       pre-rotation rest lock: a resident starting a heavy rotation Monday cannot
+     *       burn a call shift the weekend before).
+     *
+     * The objective penalizes the SHORTFALL below {@code sundayCoverageTarget} eligible
+     * coverers, summed over all weekends. Rewarding surplus (target ≥ 2) — not merely
+     * ≥ 1 — spreads coverage across multiple residents so the downstream call scheduler
+     * can balance per-resident call-shift counts instead of overloading the lone option
+     * on single-coverer weekends. A zero-coverer weekend (a forced-volunteer Sunday)
+     * incurs the full target-sized penalty, so eliminating those is the steepest gain.
+     *
+     * Returns a zero IntVar when disabled (weight ≤ 0) or when the tier lists are unset.
+     */
+    public IntVar buildSundayCoverageObjective(List<Resident> residents) {
+        int target = config.getSundayCoverageTarget();
+        Set<Integer> heavyIds  = config.getHeavyRotationIds();
+        Set<Integer> sourceIds = config.getSundaySourceRotationIds();
+
+        IntVar shortfallTotal = model.newIntVar(0,
+            (long) Math.max(0, target) * Math.max(1, totalBlocks), "tier3_sunday_shortfall");
+
+        if (config.getWeightSundayCoverage() <= 0 || target <= 0
+                || heavyIds.isEmpty() || sourceIds.isEmpty()) {
+            model.addEquality(shortfallTotal, 0);
+            return shortfallTotal;
+        }
+
+        List<IntVar> weekendShortfalls = new ArrayList<>();
+        // Weekends are block boundaries b → b+1, for b in [0, totalBlocks-2].
+        for (int b = 0; b + 1 < totalBlocks; b++) {
+            List<BoolVar> eligible = new ArrayList<>();
+            for (Resident r : residents) {
+                // onSource[b]: resident is on a Sunday-source rotation this block.
+                List<BoolVar> sourceOccs = new ArrayList<>();
+                for (int rotId : sourceIds) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b);
+                    if (occ != null) sourceOccs.add(occ);
+                }
+                if (sourceOccs.isEmpty()) continue; // resident can't be a source here
+
+                // enteringHeavy[b+1]: resident is on a heavy rotation next block.
+                List<BoolVar> heavyNextOccs = new ArrayList<>();
+                for (int rotId : heavyIds) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), rotId, b + 1);
+                    if (occ != null) heavyNextOccs.add(occ);
+                }
+
+                // elig = onSource AND NOT enteringHeavy.
+                // onSource is the sum of mutually-exclusive source occupancies (0/1).
+                // enteringHeavy is the sum of heavy occupancies next block (0/1).
+                BoolVar elig = model.newBoolVar(
+                    String.format("t3cov_elig_r%d_b%d", r.getId(), b));
+                BoolVar[] src = sourceOccs.toArray(new BoolVar[0]);
+                // elig ≤ Σ source  (can only be eligible if on a source rotation)
+                model.addLessOrEqual(elig, LinearExpr.sum(src));
+                if (!heavyNextOccs.isEmpty()) {
+                    BoolVar[] hn = heavyNextOccs.toArray(new BoolVar[0]);
+                    // elig ≤ 1 − Σ heavyNext  (not eligible if entering heavy)
+                    model.addLessOrEqual(
+                        LinearExpr.newBuilder().add(elig).addSum(hn).build(),
+                        1);
+                    // elig ≥ Σ source − Σ heavyNext  (force to 1 when on source and not entering heavy)
+                    model.addGreaterOrEqual(
+                        LinearExpr.newBuilder().add(elig)
+                            .addSum(hn)
+                            .build(),
+                        LinearExpr.sum(src));
+                } else {
+                    // No heavy-next possibility: elig == onSource.
+                    model.addGreaterOrEqual(elig, LinearExpr.sum(src));
+                }
+                eligible.add(elig);
+            }
+
+            // shortfall = max(0, target − Σ eligible)
+            IntVar shortfall = model.newIntVar(0, target,
+                String.format("t3cov_short_b%d", b));
+            if (eligible.isEmpty()) {
+                model.addEquality(shortfall, target);
+            } else {
+                BoolVar[] arr = eligible.toArray(new BoolVar[0]);
+                // shortfall ≥ target − Σ eligible   (and shortfall ≥ 0 by domain)
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(shortfall).addSum(arr).build(),
+                    target);
+            }
+            weekendShortfalls.add(shortfall);
+        }
+
+        if (weekendShortfalls.isEmpty()) {
+            model.addEquality(shortfallTotal, 0);
+        } else {
+            model.addEquality(shortfallTotal,
+                LinearExpr.sum(weekendShortfalls.toArray(new IntVar[0])));
+        }
+        return shortfallTotal;
     }
 
     public Map<String, IntVar> getUndercoverageVars() { return undercoverageVars; }

@@ -20,12 +20,19 @@ The SQLite database is created automatically on first launch.
 
 | Term | Definition |
 |------|-----------|
-| **Block** | 2 calendar weeks — the atomic scheduling unit |
-| **Academic year** | 26 blocks (labeled 1a, 1b, 2a, 2b, … 13a, 13b = 52 weeks) |
-| **4-week rotation** | 2 consecutive blocks (e.g. block 2a + 2b) |
-| **Half-block rotation** | 1 block (2 weeks) |
+| **Slot** | 2 calendar weeks — the atomic scheduling unit the solver indexes over |
+| **Academic year** | 26 slots (labeled 1a, 1b, 2a, 2b, … 13a, 13b = 52 weeks) |
+| **Full block** | a 4-week clinical block = 2 slots (e.g. 2a + 2b) |
+| **Half block** | a 2-week clinical block = 1 slot |
 
-Block indices used internally are 0-based (0–25). Display labels are 1a–13b.
+Slot indices used internally are 0-based (0–25). Display labels are 1a–13b.
+
+> **A note on the word "block."** Clinically, a *block* is 4 weeks and a
+> *half-block* is 2 weeks. Internally the solver works in 2-week **slots** (what
+> the labels 1a/1b/2a… refer to), so much of the code calls a slot a "block."
+> All week↔slot conversions are centralised in `model/ScheduleUnits.java`; rotation
+> duration fields ("Min/Max Weeks" on the Rotations tab) are entered in **weeks**.
+> See `REVIEW.md` (findings H1/H2) for the history behind this.
 
 ---
 

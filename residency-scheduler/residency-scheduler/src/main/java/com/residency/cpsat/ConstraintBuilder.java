@@ -66,6 +66,94 @@ public class ConstraintBuilder {
         }
     }
 
+    // ── 1b. Categorical-only per-block caps ───────────────────────────────
+
+    /**
+     * Caps the number of CATEGORICAL residents on a rotation per block, independent of
+     * auxiliary coverage (unlike {@link #applyCoverageConstraints}, whose max is reduced
+     * by aux). Enforces hard rotation slot limits that bind categoricals specifically —
+     * e.g. ICU ≤ 1 categorical (a TY may still add a second body up to the aux-aware total
+     * cap), VA ≤ 2 categoricals. {@code residents} here are the categorical residents the
+     * solver assigns. Rotations with {@code categoricalMaxPerBlock == 0} are skipped.
+     *
+     * Younker 7 Days is special-cased: cap = 1 categorical per block EXCEPT block 13
+     * (slots 24–25), where exactly 2 categoricals supply the day team (no BMC/TY there).
+     */
+    public void applyCategoricalCapConstraints(List<Resident> residents, List<Rotation> rotations) {
+        for (Rotation s : rotations) {
+            int cap = config.getPolicyFor(s.getId()).categoricalMaxPerBlock;
+            if (cap <= 0) continue;
+            boolean isY7d = "Younker 7 Days".equalsIgnoreCase(s.getName());
+            for (int b = 0; b < totalBlocks; b++) {
+                // Younker 7 Days block 13 (slots 24,25) has no BMC/TY 2nd body, so it needs
+                // EXACTLY 2 categoricals (both the cap and the floor are 2). Elsewhere the
+                // cap is the configured value (1) with no categorical floor.
+                boolean y7dBlock13 = isY7d && (b == 24 || b == 25);
+                int slotCap = y7dBlock13 ? 2 : cap;
+                int slotMin = y7dBlock13 ? 2 : 0;
+                List<BoolVar> blockOccs = new ArrayList<>();
+                for (Resident r : residents) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
+                    if (occ != null) blockOccs.add(occ);
+                }
+                if (blockOccs.isEmpty()) continue;
+                model.addLinearConstraint(
+                    LinearExpr.sum(blockOccs.toArray(new BoolVar[0])), slotMin, slotCap);
+            }
+        }
+    }
+
+    // ── 1c. Zero-volunteer-weekend hard floor (optional, config-gated) ─────
+
+    /**
+     * Enforces a HARD floor of zero volunteer weekends: every weekend (the back-end of
+     * half-block b, for b in 0..totalBlocks-2) must have at least one eligible categorical
+     * Sunday-Y7 coverer. A resident covers weekend b iff they are non-heavy at slot b AND
+     * non-heavy at slot b+1 (entering-heavy pre-lock); since every non-heavy rotation is a
+     * Sunday source, "non-heavy at both slots" is exactly the eligibility rule.
+     *
+     * <p>Gated by {@link ScheduleConfig#isEnforceZeroVolunteerWeekends()} — a no-op when off.
+     * Proven feasible with the full heavy load + capacity caps. The set of heavy rotation ids
+     * is resolved by the program's authoritative tier list (by name), not rotation_type.
+     */
+    public void applyZeroVolunteerFloor(List<Resident> residents, List<Rotation> rotations) {
+        if (!config.isEnforceZeroVolunteerWeekends()) return;
+
+        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
+            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
+        Set<Integer> heavyIds = rotations.stream()
+            .filter(r -> heavyNames.contains(r.getName()))
+            .map(Rotation::getId).collect(Collectors.toSet());
+        if (heavyIds.isEmpty()) return;
+
+        for (int b = 0; b + 1 < totalBlocks; b++) {
+            List<BoolVar> coverers = new ArrayList<>();
+            for (Resident r : residents) {
+                List<BoolVar> hB = new ArrayList<>(), hB1 = new ArrayList<>();
+                for (int hid : heavyIds) {
+                    BoolVar oB = vars.getOccupancyVar(r.getId(), hid, b);
+                    if (oB != null) hB.add(oB);
+                    BoolVar oB1 = vars.getOccupancyVar(r.getId(), hid, b + 1);
+                    if (oB1 != null) hB1.add(oB1);
+                }
+                // cover = 1 iff non-heavy at b AND non-heavy at b+1.
+                BoolVar cover = model.newBoolVar(String.format("zvf_cov_r%d_b%d", r.getId(), b));
+                model.addLessOrEqual(
+                    LinearExpr.newBuilder().add(cover).addSum(hB.toArray(new BoolVar[0])).build(), 1);
+                model.addLessOrEqual(
+                    LinearExpr.newBuilder().add(cover).addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(cover)
+                        .addSum(hB.toArray(new BoolVar[0]))
+                        .addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                coverers.add(cover);
+            }
+            // At least one coverer this weekend (the hard floor).
+            if (!coverers.isEmpty())
+                model.addGreaterOrEqual(LinearExpr.sum(coverers.toArray(new BoolVar[0])), 1);
+        }
+    }
+
     // ── 2. PGY-level block caps per rotation ──────────────────────────────
 
     public void applyPgyCapConstraints(List<Resident> residents, List<Rotation> rotations) {
@@ -133,16 +221,22 @@ public class ConstraintBuilder {
                     vars.getOccupancyVars(r.getId(), s.getId()).values());
                 if (occs.isEmpty()) continue;
 
-                // maxBlocksAllowed is stored in weeks in the Rotation model; divide by 2 for blocks.
-                int maxBlocks = Math.max(1, s.getMaxBlocksAllowed() / 2);
+                // maxBlocksAllowed is entered in WEEKS on the Rotations tab; convert to
+                // the solver's 2-week slot grid via the canonical helper. See ScheduleUnits.
+                int maxBlocks = Math.max(1, ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed()));
                 int minBlocks = 0;
 
                 Map<Integer, RotationRequirement> byPgy = requirements.getOrDefault(s.getId(), Map.of());
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
                 if (req != null && req.isRequired()) {
-                    int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                    int minLen = Arrays.stream(lengths).min().orElse(1);
-                    minBlocks = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    // req.minBlocks is in 4-week clinical blocks (0.5 = one 2-week slot,
+                    // 1.0 = two slots). Convert directly to slots. The previous formula
+                    // ceil(minBlocks)*minLen under-enforced requirements on rotations that
+                    // allow a 2-week segment (minLen=1) — e.g. a 2-block VA requirement
+                    // enforced only 2 slots instead of 4. See RULES_REVIEW finding B1.
+                    minBlocks = ScheduleUnits.blocksToSlots(req.getMinBlocks());
+                    // Never require more than the rotation's own max.
+                    minBlocks = Math.min(minBlocks, maxBlocks);
                 }
 
                 BoolVar[] arr = occs.toArray(new BoolVar[0]);
@@ -459,7 +553,7 @@ public class ConstraintBuilder {
         }
     }
 
-    // ── 16. Linked rotation sum constraints ───────────────────────────────
+    // ── 15. Linked rotation sum constraints ───────────────────────────────
 
     /**
      * For each RotationLinkRule (rotA, rotB, sumPerResident, globalTotalForRotB):

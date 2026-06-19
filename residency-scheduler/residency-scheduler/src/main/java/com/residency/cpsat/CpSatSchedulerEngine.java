@@ -19,7 +19,7 @@ import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 
 /**
- * Three-phase CP-SAT scheduling engine.
+ * Four-phase CP-SAT scheduling engine (Phases 0–3).
  *
  * Phase 0 — Feasibility:
  *   Build all Tier-0 hard constraints, NO objective, solve.
@@ -43,6 +43,9 @@ import java.util.stream.Collectors;
  * Each phase uses an independent time budget configured via the UI.
  */
 public class CpSatSchedulerEngine {
+
+    private static final java.util.logging.Logger LOG =
+        java.util.logging.Logger.getLogger(CpSatSchedulerEngine.class.getName());
 
     private static boolean nativeLoaded    = false;
     private static String  nativeLoadError = null;
@@ -152,6 +155,53 @@ public class CpSatSchedulerEngine {
 
     private record ModelContext(CpModel model, VariableFactory varFactory) {}
 
+    /**
+     * One toggleable Tier-0 hard constraint: a human-readable label plus the
+     * code that applies it to a ConstraintBuilder.
+     *
+     * This is the single source of truth for both the order constraints are
+     * applied AND the labels shown in the diagnostics. Previously the real model
+     * builder, the stepwise diagnosis, and the removal diagnosis each hard-coded
+     * their own order and label array, which drifted out of sync and could blame
+     * the wrong constraint for an infeasibility (see REVIEW.md finding M1).
+     *
+     * Note: block expansion and cross-rotation no-overlap are applied before any
+     * of these steps in every path, so they are not part of this toggleable list.
+     */
+    private record ConstraintStep(String label, java.util.function.Consumer<ConstraintBuilder> apply) {}
+
+    /**
+     * Canonical ordered list of toggleable hard constraints. The maps/lists the
+     * individual builders need are captured here so callers can apply any subset
+     * by simply iterating (or skipping) entries.
+     */
+    private List<ConstraintStep> orderedConstraintSteps(
+            List<Resident> residents, List<Rotation> rotations,
+            Map<Integer, Map<Integer, RotationRequirement>> reqMap,
+            Map<Integer, List<Prerequisite>> prereqMap,
+            Map<Integer, List<RotationSequenceRule>> seqMap,
+            Map<Integer, Rotation> rotById) {
+        return List.of(
+            new ConstraintStep("Coverage min/max per block",      cb -> cb.applyCoverageConstraints(residents, rotations)),
+            new ConstraintStep("Categorical-only per-block caps", cb -> cb.applyCategoricalCapConstraints(residents, rotations)),
+            new ConstraintStep("Zero-volunteer-weekend floor",    cb -> cb.applyZeroVolunteerFloor(residents, rotations)),
+            new ConstraintStep("PGY cap constraints",             cb -> cb.applyPgyCapConstraints(residents, rotations)),
+            new ConstraintStep("Workload caps",                   cb -> cb.applyWorkloadCapConstraints(residents, rotations)),
+            new ConstraintStep("Max blocks per resident",         cb -> cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap)),
+            new ConstraintStep("Full-year coverage",              cb -> cb.applyFullYearCoverageConstraints(residents, rotations)),
+            new ConstraintStep("Prerequisites",                   cb -> cb.applyPrerequisiteConstraints(residents, prereqMap, rotById)),
+            new ConstraintStep("Sequence rules",                  cb -> cb.applySequenceRules(residents, seqMap)),
+            new ConstraintStep("No-back-to-back half-blocks",     cb -> cb.applyNoBackToBackHalfBlockConstraints(residents, rotations)),
+            new ConstraintStep("Mutual non-adjacency",            cb -> cb.applyMutualNonAdjacencyConstraints(residents, rotations)),
+            new ConstraintStep("Require break between segments",  cb -> cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations)),
+            new ConstraintStep("Max consecutive blocks",          cb -> cb.applyMaxConsecutiveBlocksConstraints(residents, rotations)),
+            new ConstraintStep("Earliest start block",            cb -> cb.applyEarliestStartConstraints(residents, rotations)),
+            new ConstraintStep("Even block start",                cb -> cb.applyEvenBlockStartConstraints(residents, rotations)),
+            new ConstraintStep("Rotation link rules",             cb -> cb.applyRotationLinkConstraints(residents, rotations)),
+            new ConstraintStep("Requires consecutive",            cb -> cb.applyRequiresConsecutiveConstraints(residents, rotations))
+        );
+    }
+
     private record PhaseResult(
         CpSolverStatus status,
         CpSolver       solver,
@@ -162,6 +212,250 @@ public class CpSatSchedulerEngine {
         boolean feasible() {
             return status == CpSolverStatus.FEASIBLE || status == CpSolverStatus.OPTIMAL;
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Coverage-floor prover
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** Result of a coverage-floor proof. */
+    public record CoverageFloorResult(CpSolverStatus status, int volunteerWeekends,
+                                       boolean proven, String log) {}
+
+    /**
+     * Builds the SAME hard-constrained model as a real solve (identical capacity, shape,
+     * link, and requirement constraints — via {@link #buildBaseModel}) but replaces ALL soft
+     * objectives with a single one: MINIMIZE the number of volunteer weekends (weekends with
+     * zero eligible categorical Sunday-Y7 coverer). A categorical covers weekend b (the
+     * back-end of half-block b) iff it is non-heavy at slot b AND non-heavy at slot b+1
+     * (the entering-heavy pre-lock); since every non-heavy rotation is a Sunday source, this
+     * is exactly "light/medium at both b and b+1".
+     *
+     * <p>If this returns OPTIMAL with N volunteer weekends, N is the true mathematical floor:
+     * no schedule satisfying the hard constraints can do better, so no amount of additional
+     * solving on the full objective can beat it. Used to decide whether a long optimization
+     * run is worthwhile before spending the hours.
+     */
+    public CoverageFloorResult proveCoverageFloor(int year, int timeLimitSec) throws SQLException {
+        return proveCoverageFloor(year, timeLimitSec, false);
+    }
+
+    public CoverageFloorResult proveCoverageFloor(int year, int timeLimitSec,
+                                                  boolean minTransitionsAtZeroVolunteers) throws SQLException {
+        ensureNativeLibraries();
+        StringBuilder log = new StringBuilder();
+
+        ScheduleConfig            config        = configDAO.loadConfig();
+        List<Resident>            residents     = residentDAO.getMainResidents();
+        List<Resident>            auxResidents  = residentDAO.getAuxiliaryResidents();
+        List<Rotation>            rotations     = rotationDAO.getAll();
+        List<Block>               blocks        = blockDAO.getByYear(year);
+        List<RotationRequirement> reqs          = rulesDAO.getAllRequirements();
+        List<Prerequisite>        prereqs       = rulesDAO.getAllPrerequisites();
+        List<RotationSequenceRule> sequenceRules = rulesDAO.getAllSequenceRules();
+        if (residents.isEmpty() || rotations.isEmpty() || blocks.isEmpty())
+            return new CoverageFloorResult(CpSolverStatus.MODEL_INVALID, -1, false, "No data for year " + year);
+
+        int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR;
+        config.setTotalBlocks(totalBlocks);
+        Map<Integer, int[]> rotationLengths = new HashMap<>();
+        for (Rotation r : rotations) {
+            ScheduleConfig.RotationPolicy policy = configDAO.loadRotationPolicy(r.getId());
+            config.getRotationPolicies().put(r.getId(), policy);
+            rotationLengths.put(r.getId(), policy.allowedBlockLengths);
+        }
+        Map<Integer, Map<Integer, RotationRequirement>> reqMap = buildReqMap(reqs);
+        Map<Integer, Set<Integer>>  eligibleByRotation = buildEligibilityMap(residents, rotations, reqMap);
+        Map<Integer, List<Prerequisite>> prereqMap     = buildPrereqMap(prereqs);
+        Map<Integer, List<RotationSequenceRule>> seqMap = buildSequenceRuleMap(sequenceRules);
+        config.setRotationLinkRules(linkRuleDAO.getAll());
+        List<Integer> auxIds = auxResidents.stream().map(Resident::getId).collect(Collectors.toList());
+        Map<String, Set<Integer>> fillerRotationsByGroup = auxFillerRotationDAO.getAllFillerRotations();
+        Set<String> fillerExclusions = buildFillerExclusions(auxResidents, fillerRotationsByGroup);
+        Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
+            ? new HashMap<>()
+            : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+
+        ModelContext mc = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
+            eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+        CpModel model = mc.model();
+        VariableFactory vf = mc.varFactory();
+
+        // Heavy rotation ids (authoritative tier list, by name).
+        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
+            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
+        Set<Integer> heavyIds = rotations.stream()
+            .filter(r -> heavyNames.contains(r.getName())).map(Rotation::getId)
+            .collect(Collectors.toSet());
+
+        // heavy[r][b] = 1 iff resident r is on any heavy rotation at slot b.
+        // coverer[r][b] (weekend b) = 1 iff NOT heavy@b AND NOT heavy@b+1.
+        // volunteer[b] = 1 iff sum_r coverer[r][b] == 0.
+        List<BoolVar> volunteerVars = new ArrayList<>();
+        for (int b = 0; b + 1 < totalBlocks; b++) {
+            List<BoolVar> coverers = new ArrayList<>();
+            for (Resident r : residents) {
+                // heavyAtB, heavyAtB1 as sums of occupancy over heavy rotations.
+                List<BoolVar> hB = new ArrayList<>(), hB1 = new ArrayList<>();
+                for (int hid : heavyIds) {
+                    BoolVar oB = vf.getOccupancyVar(r.getId(), hid, b);
+                    if (oB != null) hB.add(oB);
+                    BoolVar oB1 = vf.getOccupancyVar(r.getId(), hid, b + 1);
+                    if (oB1 != null) hB1.add(oB1);
+                }
+                // cover = 1 - heavyAtB - heavyAtB1 clamped; model as: cover <= 1-heavyAtB,
+                // cover <= 1-heavyAtB1, cover >= 1-heavyAtB-heavyAtB1.
+                BoolVar cover = model.newBoolVar(String.format("cov_r%d_b%d", r.getId(), b));
+                LinearExprBuilder sumB = LinearExpr.newBuilder();
+                hB.forEach(sumB::add);
+                LinearExprBuilder sumB1 = LinearExpr.newBuilder();
+                hB1.forEach(sumB1::add);
+                // cover + heavyAtB <= 1
+                model.addLessOrEqual(LinearExpr.newBuilder().add(cover).addSum(hB.toArray(new BoolVar[0])).build(), 1);
+                // cover + heavyAtB1 <= 1
+                model.addLessOrEqual(LinearExpr.newBuilder().add(cover).addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                // cover >= 1 - heavyAtB - heavyAtB1  ->  cover + heavyAtB + heavyAtB1 >= 1
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(cover)
+                        .addSum(hB.toArray(new BoolVar[0]))
+                        .addSum(hB1.toArray(new BoolVar[0])).build(), 1);
+                coverers.add(cover);
+            }
+            // volunteer[b] = 1 iff sum(coverers) == 0  ->  sum + M*volunteer >= 1, volunteer <= 1-...
+            // Simpler: volunteer is BoolVar with  sum(coverers) >= 1 - volunteer*BIG is awkward;
+            // use: anyCover = OR(coverers); volunteer = 1 - anyCover.
+            BoolVar volunteer = model.newBoolVar("volunteer_b" + b);
+            // volunteer + sum(coverers) >= 1  (if no coverer, volunteer must be 1)
+            model.addGreaterOrEqual(
+                LinearExpr.newBuilder().add(volunteer).addSum(coverers.toArray(new BoolVar[0])).build(), 1);
+            // volunteer <= 1 - cover for each coverer (if any coverer=1, volunteer=0)
+            for (BoolVar cov : coverers)
+                model.addLessOrEqual(LinearExpr.newBuilder().add(volunteer).add(cov).build(), 1);
+            volunteerVars.add(volunteer);
+        }
+
+        IntVar volunteerTotal = model.newIntVar(0, volunteerVars.size(), "volunteer_total");
+        model.addEquality(volunteerTotal, LinearExpr.sum(volunteerVars.toArray(new BoolVar[0])));
+
+        if (minTransitionsAtZeroVolunteers) {
+            // Hard-lock volunteers to 0, then minimize a transition proxy: count of
+            // heavy→different-heavy adjacencies plus heavy/medium "run-excess" beyond 3 slots
+            // (6 weeks). This shows the BEST transition quality achievable with perfect
+            // coverage — the real schedule a volunteers=0 hard floor would produce.
+            model.addEquality(volunteerTotal, 0);
+
+            Set<Integer> medNames = rotations.stream()
+                .filter(r -> r.getName().equals("Inpatient GI") || r.getName().equals("Infectious Disease"))
+                .map(Rotation::getId).collect(Collectors.toSet());
+            List<BoolVar> heavyHeavy = new ArrayList<>();
+            // Build heavy/medium indicator per resident-slot and the heavy→diff-heavy terms.
+            Map<String, BoolVar> hmVar = new HashMap<>();
+            for (Resident r : residents) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    List<BoolVar> occs = new ArrayList<>();
+                    for (int id : heavyIds) { BoolVar o = vf.getOccupancyVar(r.getId(), id, b); if (o != null) occs.add(o); }
+                    for (int id : medNames) { BoolVar o = vf.getOccupancyVar(r.getId(), id, b); if (o != null) occs.add(o); }
+                    BoolVar hm = model.newBoolVar("hm_r" + r.getId() + "_b" + b);
+                    // hm = OR(occs)
+                    model.addGreaterOrEqual(LinearExpr.newBuilder().add(hm).build(),
+                        LinearExpr.newBuilder().addSum(occs.toArray(new BoolVar[0])).build());
+                    for (BoolVar o : occs) model.addLessOrEqual(o, hm);
+                    hmVar.put(r.getId() + "_" + b, hm);
+                }
+            }
+            // heavy→different-heavy adjacencies
+            for (Resident r : residents) {
+                for (int b = 0; b + 1 < totalBlocks; b++) {
+                    for (int h1 : heavyIds) {
+                        BoolVar o1 = vf.getOccupancyVar(r.getId(), h1, b);
+                        if (o1 == null) continue;
+                        for (int h2 : heavyIds) {
+                            if (h1 == h2) continue;
+                            BoolVar o2 = vf.getOccupancyVar(r.getId(), h2, b + 1);
+                            if (o2 == null) continue;
+                            // v = o1 AND o2 : v<=o1, v<=o2, v>=o1+o2-1.
+                            BoolVar v = model.newBoolVar("hh_r" + r.getId() + "_b" + b + "_" + h1 + "_" + h2);
+                            model.addLessOrEqual(v, o1);
+                            model.addLessOrEqual(v, o2);
+                            model.addGreaterOrEqual(
+                                LinearExpr.newBuilder().add(v).build(),
+                                LinearExpr.newBuilder().add(o1).add(o2).add(-1).build());
+                            heavyHeavy.add(v);
+                        }
+                    }
+                }
+            }
+            // run-excess: for each window of 4 consecutive slots (8 weeks), penalize if all 4
+            // are heavy/medium (a >6-week run). Sum over windows ≈ count of long-run slots.
+            List<BoolVar> longRun = new ArrayList<>();
+            for (Resident r : residents) {
+                for (int b = 0; b + 3 < totalBlocks; b++) {
+                    BoolVar w = model.newBoolVar("long_r" + r.getId() + "_b" + b);
+                    // w = 1 iff hm[b]..hm[b+3] all 1
+                    List<BoolVar> four = new ArrayList<>();
+                    for (int k = 0; k < 4; k++) four.add(hmVar.get(r.getId() + "_" + (b + k)));
+                    for (BoolVar h : four) model.addGreaterOrEqual(h, w);
+                    model.addLessOrEqual(LinearExpr.newBuilder().add(w).build(),
+                        LinearExpr.newBuilder().addSum(four.toArray(new BoolVar[0])).add(-3).build());
+                    longRun.add(w);
+                }
+            }
+            LinearExprBuilder obj = LinearExpr.newBuilder();
+            for (BoolVar v : heavyHeavy) obj.addTerm(v, 10);  // heavy→heavy weighted heavier
+            for (BoolVar v : longRun) obj.addTerm(v, 3);
+            IntVar transCost = model.newIntVar(0, 100000, "trans_cost");
+            model.addEquality(transCost, obj.build());
+            model.minimize(transCost);
+        } else {
+            model.minimize(volunteerTotal);
+        }
+
+        CpSolver solver = configureSolver(config, timeLimitSec);
+        long t0 = System.currentTimeMillis();
+        CpSolverStatus status = solver.solve(model);
+        double secs = (System.currentTimeMillis() - t0) / 1000.0;
+
+        int vol = -1;
+        if (status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE) {
+            vol = (int) Math.round(solver.value(volunteerTotal));
+            // Independent audit: dump per-resident heavy slot counts so a false floor (one
+            // that dodged the heavy requirements) is caught — the totals must match the
+            // required load (VA=4, ICU/BMC/Y7D/Y8P=2, Y7N≈2 slots per resident).
+            log.append("  AUDIT — per-resident heavy slots (must be ~13–14): ");
+            for (Resident r : residents) {
+                int h = 0;
+                for (int hid : heavyIds)
+                    for (int b = 0; b < totalBlocks; b++) {
+                        BoolVar o = vf.getOccupancyVar(r.getId(), hid, b);
+                        if (o != null && solver.booleanValue(o)) h++;
+                    }
+                log.append(h).append(" ");
+            }
+            log.append("\n");
+            // Dump the full assignment grid (resident,slot,rotation) so it can be independently
+            // re-scored by the external metrics. Marker line for easy parsing.
+            log.append("GRID_BEGIN\n");
+            for (Resident r : residents) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    for (Rotation s : rotations) {
+                        BoolVar o = vf.getOccupancyVar(r.getId(), s.getId(), b);
+                        if (o != null && solver.booleanValue(o)) {
+                            log.append(r.getId()).append(',').append(b).append(',')
+                               .append(s.getName()).append('\n');
+                        }
+                    }
+                }
+            }
+            log.append("GRID_END\n");
+        }
+        boolean proven = status == CpSolverStatus.OPTIMAL;
+        log.append(String.format("Coverage-floor proof: status=%s  volunteerWeekends=%d  proven=%s  (%.1fs)%n",
+            status, vol, proven, secs));
+        if (proven)
+            log.append("  => This IS the mathematical floor; no full-objective solve can beat it.\n");
+        else
+            log.append("  => Not proven optimal within the time limit (lower bound only).\n");
+        return new CoverageFloorResult(status, vol, proven, log.toString());
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -201,7 +495,7 @@ public class CpSatSchedulerEngine {
             return empty;
         }
 
-        int totalBlocks = 26;
+        int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR; // 26 two-week slots = one academic year
         config.setTotalBlocks(totalBlocks);
 
         Map<Integer, int[]> rotationLengths = new HashMap<>();
@@ -224,8 +518,20 @@ public class CpSatSchedulerEngine {
         Map<String, Set<Integer>> fillerRotationsByGroup = auxFillerRotationDAO.getAllFillerRotations();
         Set<String> fillerExclusions = buildFillerExclusions(auxResidents, fillerRotationsByGroup);
         Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
-            ? Map.of()
-            : assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions);
+            ? new HashMap<>()
+            : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+
+        // Younker 7 Days coverage model (real-world rule): EXACTLY 2 bodies per block.
+        // This is NOT enforced as a solver coverage floor — doing so is infeasible, because
+        // each categorical does exactly one Y7D block (their per-resident requirement) and
+        // that supply can't also cover every block. Instead:
+        //   • Each categorical does 1 Y7D block (enforced by rotation_requirements).
+        //   • The solver caps categoricals at 1/block, except block 13 (2 categoricals).
+        //   • The BMC group statically staffs Y7D on every block EXCEPT block 7 and 13;
+        //     this is written into the schedule post-solve by AuxFillerService (so BMC
+        //     coverage is VISIBLE, not merely inferred) — see runAuxFiller / the Y7D fill.
+        //   • Block 7's 2nd body is a TY (external); block 13's is the 2nd categorical.
+        // Y7D therefore needs no solver-side per-block min; its total is capped at 2.
 
         // ── 2. Pre-solve feasibility analysis ─────────────────────────────
         onProgress.accept("Running feasibility analysis…");
@@ -244,7 +550,7 @@ public class CpSatSchedulerEngine {
 
         if (stopRequested.get()) return aborted(feasReport);
 
-        // ── 4. Three-phase solve ───────────────────────────────────────────
+        // ── 4. Four-phase solve ────────────────────────────────────────────
 
         // ─── Phase 0: Pure feasibility ────────────────────────────────────
         onProgress.accept(String.format(
@@ -286,7 +592,7 @@ public class CpSatSchedulerEngine {
             applyHints(mc1.model(), mc1.varFactory(), residents, rotations, totalBlocks, p0.hints());
 
         ObjectiveFunctionBuilder obj1 = new ObjectiveFunctionBuilder(
-            mc1.model(), mc1.varFactory(), config, totalBlocks);
+            mc1.model(), mc1.varFactory(), config, totalBlocks, auxCoverage);
         IntVar tier1Var = obj1.buildTier1Counter(residents, rotations);
         mc1.model().minimize(tier1Var);
 
@@ -302,7 +608,8 @@ public class CpSatSchedulerEngine {
             p1 = new PhaseResult(status1, solver1, mc1.varFactory(), p0.hints(), Integer.MAX_VALUE);
             onProgress.accept("Phase 1 timeout — no improvement. Using Phase 0 result for Phase 2.");
         } else if (status1 == CpSolverStatus.FEASIBLE || status1 == CpSolverStatus.OPTIMAL) {
-            try { bestTier1 = (int) solver1.value(tier1Var); } catch (Exception ignored) {}
+            try { bestTier1 = (int) solver1.value(tier1Var); }
+            catch (Exception e) { LOG.log(java.util.logging.Level.WARNING, "Could not read Tier-1 objective value", e); }
             Map<String, Long> h1 = extractHints(solver1, mc1.varFactory(), residents, rotations, totalBlocks);
             p1 = new PhaseResult(status1, solver1, mc1.varFactory(), h1, bestTier1);
             onProgress.accept(String.format("Phase 1 ✓ [%s]  Tier-1 score: %d  |  Phase 2 ▶ Quality (limit: %ds)…",
@@ -325,7 +632,7 @@ public class CpSatSchedulerEngine {
             applyHints(mc2.model(), mc2.varFactory(), residents, rotations, totalBlocks, p1.hints());
 
         ObjectiveFunctionBuilder obj2 = new ObjectiveFunctionBuilder(
-            mc2.model(), mc2.varFactory(), config, totalBlocks);
+            mc2.model(), mc2.varFactory(), config, totalBlocks, auxCoverage);
 
         if (bestTier1 < Integer.MAX_VALUE) {
             IntVar tier1Lock = obj2.buildTier1Counter(residents, rotations);
@@ -342,7 +649,8 @@ public class CpSatSchedulerEngine {
         long bestTier2 = Long.MAX_VALUE;
         PhaseResult p2;
         if (status2 == CpSolverStatus.FEASIBLE || status2 == CpSolverStatus.OPTIMAL) {
-            try { bestTier2 = (long) solver2.value(tier2CostVar); } catch (Exception ignored) {}
+            try { bestTier2 = (long) solver2.value(tier2CostVar); }
+            catch (Exception e) { LOG.log(java.util.logging.Level.WARNING, "Could not read Tier-2 objective value", e); }
             Map<String, Long> h2 = extractHints(solver2, mc2.varFactory(), residents, rotations, totalBlocks);
             p2 = new PhaseResult(status2, solver2, mc2.varFactory(), h2, bestTier1);
             onProgress.accept(String.format("Phase 2 ✓ [%s]  Tier-2 cost: %d  |  Phase 3 ▶ Pattern (limit: %ds)…",
@@ -370,7 +678,7 @@ public class CpSatSchedulerEngine {
             applyHints(mc3.model(), mc3.varFactory(), residents, rotations, totalBlocks, p2.hints());
 
         ObjectiveFunctionBuilder obj3 = new ObjectiveFunctionBuilder(
-            mc3.model(), mc3.varFactory(), config, totalBlocks);
+            mc3.model(), mc3.varFactory(), config, totalBlocks, auxCoverage);
 
         if (bestTier1 < Integer.MAX_VALUE) {
             IntVar tier1Lock3 = obj3.buildTier1Counter(residents, rotations);
@@ -380,7 +688,17 @@ public class CpSatSchedulerEngine {
         if (bestTier2 < Long.MAX_VALUE) mc3.model().addLessOrEqual(tier2Lock3, bestTier2);
 
         IntVar patternCost = obj3.buildPatternObjective(residents, rotations);
-        mc3.model().minimize(patternCost);
+        // Fold the Sunday weekend-coverage shortfall into the Phase-3 objective. Both are
+        // Tier-3 soft nudges that run with Tier-1 (clinical) and Tier-2 (coverage/variance)
+        // locked ≤ best, so this can only break ties within the already-optimal frontier —
+        // it cannot degrade clinical or coverage quality. Disabled (zero) unless
+        // weight_sunday_coverage and the heavy/source tier lists are configured.
+        IntVar sundayShortfall = obj3.buildSundayCoverageObjective(residents);
+        mc3.model().minimize(
+            LinearExpr.newBuilder()
+                .add(patternCost)
+                .addTerm(sundayShortfall, config.getWeightSundayCoverage())
+                .build());
 
         CpSolver solver3 = configureSolver(config, tier3LimitSec);
         activeSolver = solver3;
@@ -422,7 +740,7 @@ public class CpSatSchedulerEngine {
             if (vr.hasFailed()) onProgress.accept("⚠ Post-solve validation failures — see solver log.");
 
             // Constraint score breakdown
-            SolutionScoreReporter reporter = new SolutionScoreReporter(config, totalBlocks);
+            SolutionScoreReporter reporter = new SolutionScoreReporter(config, totalBlocks, auxCoverage);
             solverLog.append(reporter.buildReport(solution, residents, rotations));
         }
 
@@ -477,21 +795,12 @@ public class CpSatSchedulerEngine {
             .collect(Collectors.toMap(Rotation::getId, r -> r));
 
         ConstraintBuilder cb = new ConstraintBuilder(model, varFactory, config, totalBlocks, auxCoverage);
-        cb.applyCoverageConstraints(residents, rotations);
-        cb.applyPgyCapConstraints(residents, rotations);
-        cb.applyWorkloadCapConstraints(residents, rotations);
-        cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap);
-        cb.applyFullYearCoverageConstraints(residents, rotations);
-        cb.applyPrerequisiteConstraints(residents, prereqMap, rotById);
-        cb.applySequenceRules(residents, seqMap);
-        cb.applyNoBackToBackHalfBlockConstraints(residents, rotations);
-        cb.applyMutualNonAdjacencyConstraints(residents, rotations);
-        cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations);
-        cb.applyMaxConsecutiveBlocksConstraints(residents, rotations);
-        cb.applyEarliestStartConstraints(residents, rotations);
-        cb.applyEvenBlockStartConstraints(residents, rotations);
-        cb.applyRotationLinkConstraints(residents, rotations);
-        cb.applyRequiresConsecutiveConstraints(residents, rotations);
+        // Apply every toggleable hard constraint, in the canonical order. The same
+        // ordered list drives the stepwise and removal diagnostics, so they can
+        // never disagree about which constraint is which (REVIEW.md M1).
+        for (ConstraintStep step : orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById)) {
+            step.apply().accept(cb);
+        }
 
         return new ModelContext(model, varFactory);
     }
@@ -503,6 +812,9 @@ public class CpSatSchedulerEngine {
     private Map<String, Long> extractHints(CpSolver solver, VariableFactory varFactory,
             List<Resident> residents, List<Rotation> rotations, int totalBlocks) {
         Map<String, Long> hints = new HashMap<>();
+        // Per-variable reads can legitimately fail (e.g. a var not in this phase's
+        // model); those are counted and reported once rather than logged per element.
+        int[] failures = {0};
         try {
             for (Resident r : residents) {
                 for (Rotation s : rotations) {
@@ -510,16 +822,20 @@ public class CpSatSchedulerEngine {
                         BoolVar occ = varFactory.getOccupancyVar(r.getId(), s.getId(), w);
                         if (occ != null) {
                             try { hints.put(occ.getName(), solver.booleanValue(occ) ? 1L : 0L); }
-                            catch (Exception ignored) {}
+                            catch (Exception e) { failures[0]++; }
                         }
                     }
                     varFactory.getStartVars(r.getId(), s.getId()).forEach((week, sv) -> {
                         try { hints.put(sv.getName(), solver.booleanValue(sv) ? 1L : 0L); }
-                        catch (Exception ignored) {}
+                        catch (Exception e) { failures[0]++; }
                     });
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING, "Hint extraction aborted early", e);
+        }
+        if (failures[0] > 0)
+            LOG.warning("Hint extraction: " + failures[0] + " variable reads failed (warm-start may be partial).");
         return hints;
     }
 
@@ -579,8 +895,12 @@ public class CpSatSchedulerEngine {
             default         -> sol.setStatus(ScheduleSolution.Status.UNKNOWN);
         }
 
-        try { sol.setObjectiveValue(solver.objectiveValue()); } catch (Exception ignored) {}
+        try { sol.setObjectiveValue(solver.objectiveValue()); }
+        catch (Exception e) { LOG.log(java.util.logging.Level.WARNING, "Could not read objective value", e); }
 
+        // Per-variable reads can fail individually; a non-zero count means some
+        // assignments were dropped from the committed schedule, so report it.
+        int failures = 0;
         try {
             for (Resident r : residents) {
                 for (Rotation s : rotations) {
@@ -589,11 +909,15 @@ public class CpSatSchedulerEngine {
                         try {
                             if (occ != null && solver.booleanValue(occ))
                                 sol.recordAssignment(r.getId(), s.getId(), w);
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) { failures++; }
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.SEVERE, "Solution extraction aborted early — schedule may be incomplete", e);
+        }
+        if (failures > 0)
+            LOG.severe("Solution extraction: " + failures + " assignment reads failed — committed schedule may be incomplete.");
 
         bestSolution = sol;
         return sol;
@@ -611,7 +935,7 @@ public class CpSatSchedulerEngine {
             ScheduleConfig config) throws SQLException {
         ScheduleSolution sol = best.feasible()
             ? extractSolution(best.solver(), best.status(), best.varFactory(),
-                              residents, rotations, 26, feasReport, startMs)
+                              residents, rotations, ScheduleUnits.SLOTS_PER_YEAR, feasReport, startMs)
             : aborted(feasReport);
         commitToDB(sol, year, blocks, residents, rotations);
         if (sol.getStatus() != ScheduleSolution.Status.INFEASIBLE) {
@@ -786,19 +1110,21 @@ public class CpSatSchedulerEngine {
             for (Rotation s : rotations) {
                 Set<Integer> pool = eligibleByRotation.get(s.getId());
                 if (pool != null && !pool.contains(r.getId())) continue;
-                maxSchedulable += s.getMaxBlocksAllowed();
+                // All quantities here are in SLOTS (2-week units) so they compare directly
+                // against effMin/effMax, which are slot-based workload bounds. maxBlocksAllowed
+                // is entered in WEEKS, so convert. (Previously used raw weeks — see REVIEW.md H2.)
+                int maxSlots = ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed());
+                maxSchedulable += maxSlots;
                 Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
                 if (req != null && req.isRequired()) {
                     int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                    int minLen = Arrays.stream(lengths).min().orElse(2);
-                    int minWks = (int) Math.ceil(req.getMinBlocks()) * minLen;
-                    int maxWks = s.getMaxBlocksAllowed();
-                    minDemanded += minWks;
-                    String flag = (minWks > maxWks) ? " ⚠ minWks>maxWks CONTRADICTION" : "";
+                    int minSlots = ScheduleUnits.blocksToSlots(req.getMinBlocks());
+                    minDemanded += minSlots;
+                    String flag = (minSlots > maxSlots) ? " ⚠ minSlots>maxSlots CONTRADICTION" : "";
                     reqDetail.append(String.format(
-                        "    %-30s  minBlocks=%.1f  lengths=%s  minWks=%d  maxWks=%d%s\n",
-                        s.getName(), req.getMinBlocks(), Arrays.toString(lengths), minWks, maxWks, flag));
+                        "    %-30s  minBlocks=%.1f  lengths=%s  minSlots=%d  maxSlots=%d%s\n",
+                        s.getName(), req.getMinBlocks(), Arrays.toString(lengths), minSlots, maxSlots, flag));
                 }
             }
             boolean ok = maxSchedulable >= effMin && minDemanded <= effMax;
@@ -837,26 +1163,20 @@ public class CpSatSchedulerEngine {
             Map<Integer, Map<Integer, Integer>> auxCoverage,
             int totalBlocks) {
 
-        String[] labels = {
-            "1.  Block expansion + no-overlap",
-            "2.  + Workload caps",
-            "3.  + Coverage (with aux offset)",
-            "4.  + Max blocks per resident",
-            "5.  + Prerequisites",
-            "6.  + Sequence rules",
-            "7.  + No-back-to-back half-blocks",
-            "8.  + Mutual non-adjacency",
-            "9.  + Require break between segments",
-            "10. + Max consecutive blocks",
-            "11. + Earliest start block",
-            "12. + Even block start",
-            "13. + Rotation link rules (Y7N+Elective=N)",
-            "14. + PGY cap constraints",
-            "15. + Full-year coverage"
-        };
-
         Map<Integer, Rotation> rotById = rotations.stream()
             .collect(Collectors.toMap(Rotation::getId, r -> r));
+
+        // Canonical constraint order — identical to buildBaseModel. Step 0 below is
+        // "block expansion + no-overlap only"; step k>=1 adds the first k constraints
+        // from this list cumulatively, so the lowest INFEASIBLE step pinpoints the
+        // constraint that introduced the contradiction.
+        List<ConstraintStep> steps = orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById);
+
+        String[] labels = new String[steps.size() + 1];
+        labels[0] = "1.  Block expansion + no-overlap";
+        for (int i = 0; i < steps.size(); i++) {
+            labels[i + 1] = String.format("%-2d. + %s", i + 2, steps.get(i).label());
+        }
 
         log.append("  Launching all steps in parallel (1 worker each)…\n");
 
@@ -875,20 +1195,8 @@ public class CpSatSchedulerEngine {
                 bes.applyAll(residents, rotations);
                 bes.applyNoOverlapAcrossRotations(residents, rotations);
                 ConstraintBuilder cb = new ConstraintBuilder(m, vf, config, totalBlocks, auxCoverage);
-                if (s >= 1)  cb.applyWorkloadCapConstraints(residents, rotations);
-                if (s >= 2)  cb.applyCoverageConstraints(residents, rotations);
-                if (s >= 3)  cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap);
-                if (s >= 4)  cb.applyPrerequisiteConstraints(residents, prereqMap, rotById);
-                if (s >= 5)  cb.applySequenceRules(residents, seqMap);
-                if (s >= 6)  cb.applyNoBackToBackHalfBlockConstraints(residents, rotations);
-                if (s >= 7)  cb.applyMutualNonAdjacencyConstraints(residents, rotations);
-                if (s >= 8)  cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations);
-                if (s >= 9)  cb.applyMaxConsecutiveBlocksConstraints(residents, rotations);
-                if (s >= 10) cb.applyEarliestStartConstraints(residents, rotations);
-                if (s >= 11) cb.applyEvenBlockStartConstraints(residents, rotations);
-                if (s >= 12) cb.applyRotationLinkConstraints(residents, rotations);
-                if (s >= 13) cb.applyPgyCapConstraints(residents, rotations);
-                if (s >= 14) cb.applyFullYearCoverageConstraints(residents, rotations);
+                // Apply the first s constraints (step 0 applies none beyond expansion).
+                for (int i = 0; i < s; i++) steps.get(i).apply().accept(cb);
                 CpSolver solver = new CpSolver();
                 solver.getParameters().setMaxTimeInSeconds(15);
                 solver.getParameters().setNumWorkers(1);
@@ -936,12 +1244,16 @@ public class CpSatSchedulerEngine {
 
         boolean foundInfeasibleStep = firstInfeasible >= 0;
         if (foundInfeasibleStep) {
-            if (firstInfeasible == 3) {
-                log.append("\n  Drilling into Step 4 — adding (resident, rotation) pairs one at a time:\n");
+            // Key the drill-downs off the constraint that first failed, by label, so
+            // they stay correct even if the constraint order changes later. The
+            // culprit constraint is steps.get(firstInfeasible - 1) (step 0 = expansion).
+            String culprit = firstInfeasible >= 1 ? steps.get(firstInfeasible - 1).label() : "";
+            if (culprit.equals("Max blocks per resident")) {
+                log.append("\n  Drilling into '" + culprit + "' — adding (resident, rotation) pairs one at a time:\n");
                 drillMaxBlocksConstraint(log, residents, rotations, config, reqMap,
                     eligibleByRotation, rotationLengths, auxCoverage, totalBlocks);
-            } else if (firstInfeasible == 10) {
-                log.append("\n  Drilling into Step 11 — earliest start block constraints:\n");
+            } else if (culprit.equals("Earliest start block")) {
+                log.append("\n  Drilling into '" + culprit + "' — earliest start block constraints:\n");
                 drillEarliestStartConstraints(log, residents, rotations, config,
                     reqMap, eligibleByRotation, rotationLengths, auxCoverage, totalBlocks);
             }
@@ -955,7 +1267,7 @@ public class CpSatSchedulerEngine {
         }
     }
 
-    /** Applies all 15 constraints then drops each one individually to find which removal restores feasibility. */
+    /** Applies all toggleable constraints, then drops each one individually to find which removal restores feasibility. */
     private void runRemovalDiagnosis(
             StringBuilder log,
             List<Resident> residents, List<Rotation> rotations,
@@ -969,27 +1281,13 @@ public class CpSatSchedulerEngine {
             int totalBlocks,
             Map<Integer, Rotation> rotById) {
 
-        String[] labels = {
-            "Workload caps",
-            "Coverage",
-            "Max blocks per resident",
-            "Prerequisites",
-            "Sequence rules",
-            "No-back-to-back half-blocks",
-            "Mutual non-adjacency",
-            "Require break between segments",
-            "Max consecutive blocks",
-            "Earliest start block",
-            "Even block start",
-            "Rotation link rules",
-            "PGY cap constraints",
-            "Full-year coverage"
-        };
+        // Same canonical order/labels as buildBaseModel and the stepwise diagnosis.
+        List<ConstraintStep> steps = orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById);
 
         // Use a longer timeout per removal test since we know the full problem is hard
         int removalTimeoutSec = 30;
 
-        for (int drop = 0; drop < labels.length; drop++) {
+        for (int drop = 0; drop < steps.size(); drop++) {
             CpModel m = new CpModel();
             VariableFactory vf = new VariableFactory(m, totalBlocks, rotationLengths);
             vf.createAll(residents, rotations, eligibleByRotation);
@@ -998,20 +1296,10 @@ public class CpSatSchedulerEngine {
             bes.applyNoOverlapAcrossRotations(residents, rotations);
             ConstraintBuilder cb = new ConstraintBuilder(m, vf, config, totalBlocks, auxCoverage);
 
-            if (drop != 0)  cb.applyWorkloadCapConstraints(residents, rotations);
-            if (drop != 1)  cb.applyCoverageConstraints(residents, rotations);
-            if (drop != 2)  cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap);
-            if (drop != 3)  cb.applyPrerequisiteConstraints(residents, prereqMap, rotById);
-            if (drop != 4)  cb.applySequenceRules(residents, seqMap);
-            if (drop != 5)  cb.applyNoBackToBackHalfBlockConstraints(residents, rotations);
-            if (drop != 6)  cb.applyMutualNonAdjacencyConstraints(residents, rotations);
-            if (drop != 7)  cb.applyRequireBreakBetweenSegmentsConstraints(residents, rotations);
-            if (drop != 8)  cb.applyMaxConsecutiveBlocksConstraints(residents, rotations);
-            if (drop != 9)  cb.applyEarliestStartConstraints(residents, rotations);
-            if (drop != 10) cb.applyEvenBlockStartConstraints(residents, rotations);
-            if (drop != 11) cb.applyRotationLinkConstraints(residents, rotations);
-            if (drop != 12) cb.applyPgyCapConstraints(residents, rotations);
-            if (drop != 13) cb.applyFullYearCoverageConstraints(residents, rotations);
+            // Apply every constraint except the one being dropped.
+            for (int i = 0; i < steps.size(); i++) {
+                if (i != drop) steps.get(i).apply().accept(cb);
+            }
 
             CpSolver sv = new CpSolver();
             sv.getParameters().setMaxTimeInSeconds(removalTimeoutSec);
@@ -1023,13 +1311,13 @@ public class CpSatSchedulerEngine {
                 case INFEASIBLE        -> "still INFEASIBLE";
                 default                -> "UNKNOWN (timeout)";
             };
-            log.append(String.format("    drop %-35s → %s\n", labels[drop], result));
+            log.append(String.format("    drop %-35s → %s\n", steps.get(drop).label(), result));
 
             if (st == CpSolverStatus.FEASIBLE || st == CpSolverStatus.OPTIMAL) {
                 log.append(String.format(
                     "\n  ★ Constraint '%s' is part of the conflict. " +
                     "Review its settings — relaxing or removing it should restore feasibility.\n",
-                    labels[drop]));
+                    steps.get(drop).label()));
             }
         }
     }
@@ -1112,8 +1400,7 @@ public class CpSatSchedulerEngine {
                 for (Resident r : residents) {
                     RotationRequirement req = reqMap.getOrDefault(s.getId(), Map.of()).get(r.getPgyLevel());
                     if (req != null && req.isRequired()) {
-                        int minLen = Arrays.stream(policy.allowedBlockLengths).min().orElse(1);
-                        totalMinDemand += (int) Math.ceil(req.getMinBlocks()) * minLen;
+                        totalMinDemand += ScheduleUnits.blocksToSlots(req.getMinBlocks());
                     }
                 }
 
@@ -1231,8 +1518,7 @@ public class CpSatSchedulerEngine {
                 if (sv.solve(m) != CpSolverStatus.INFEASIBLE) reachable++;
             }
 
-            int minLen = Arrays.stream(policy.allowedBlockLengths).min().orElse(1);
-            int needed = (int) Math.ceil(req.getMinBlocks()) * minLen;
+            int needed = ScheduleUnits.blocksToSlots(req.getMinBlocks());
             if (reachable < needed) {
                 log.append(String.format(
                     "        ⚠ %-20s  reachableBlocks=%d  needed=%d  [BLOCKED]\n",
@@ -1262,14 +1548,15 @@ public class CpSatSchedulerEngine {
             for (Rotation s : rotations) {
                 Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
                 RotationRequirement req = byPgy.get(r.getPgyLevel());
-                int maxWks = s.getMaxBlocksAllowed();
-                int minWks = 0;
+                // Mirror applyMaxBlocksPerResidentConstraints: bounds are in SLOTS.
+                // maxBlocksAllowed is entered in WEEKS -> convert via ScheduleUnits.
+                int maxSlots = Math.max(1, ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed()));
+                int minSlots = 0;
                 if (req != null && req.isRequired()) {
-                    int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                    int minLen = Arrays.stream(lengths).min().orElse(2);
-                    minWks = (int) Math.ceil(req.getMinBlocks()) * minLen;
+                    // Mirror ConstraintBuilder.applyMaxBlocksPerResidentConstraints exactly.
+                    minSlots = Math.min(ScheduleUnits.blocksToSlots(req.getMinBlocks()), maxSlots);
                 }
-                addedPairs.add(new int[]{r.getId(), s.getId(), minWks, maxWks});
+                addedPairs.add(new int[]{r.getId(), s.getId(), minSlots, maxSlots});
 
                 CpModel m = new CpModel();
                 VariableFactory vf2 = new VariableFactory(m, totalBlocks, rotationLengths);
@@ -1292,8 +1579,8 @@ public class CpSatSchedulerEngine {
                 sv.getParameters().setNumWorkers(1);
                 CpSolverStatus st = sv.solve(m);
 
-                String pairLabel = String.format("PGY-%d %-15s + %-30s [min=%d max=%d wks]",
-                    r.getPgyLevel(), r.getName(), s.getName(), minWks, maxWks);
+                String pairLabel = String.format("PGY-%d %-15s + %-30s [min=%d max=%d slots]",
+                    r.getPgyLevel(), r.getName(), s.getName(), minSlots, maxSlots);
 
                 if (st == CpSolverStatus.INFEASIBLE) {
                     log.append(String.format("    ⚠ INFEASIBLE after adding: %s\n", pairLabel));
@@ -1327,9 +1614,7 @@ public class CpSatSchedulerEngine {
                     Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
                     RotationRequirement req = byPgy.get(r.getPgyLevel());
                     if (req != null && req.isRequired()) {
-                        int[] lengths = config.getPolicyFor(s.getId()).allowedBlockLengths;
-                        int minLen = Arrays.stream(lengths).min().orElse(2);
-                        totalMinDemand += (int) Math.ceil(req.getMinBlocks()) * minLen;
+                        totalMinDemand += ScheduleUnits.blocksToSlots(req.getMinBlocks());
                     }
                 }
 

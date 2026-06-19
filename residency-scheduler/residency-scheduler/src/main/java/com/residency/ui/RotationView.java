@@ -50,6 +50,8 @@ public class RotationView extends BorderPane {
         maxBlkCol.setCellValueFactory(cellData -> new javafx.beans.property.SimpleStringProperty(
             String.valueOf(cellData.getValue().getMaxBlocksAllowed())));
         maxBlkCol.setPrefWidth(80);
+        // Min/Max are stored and entered in WEEKS (multiples of 2): a half-block = 2 weeks,
+        // a full block = 4 weeks. The solver converts weeks -> 2-week slots (ScheduleUnits).
 
         TableColumn<Rotation, String> typeCol = new TableColumn<>("Type");
         typeCol.setCellValueFactory(cellData -> new javafx.beans.property.SimpleStringProperty(
@@ -74,6 +76,12 @@ public class RotationView extends BorderPane {
         Tooltip.install(maxPerBlock, maxPerBlockTip);
         Spinner<Integer> minWeeks = new Spinner<>(2, 52, 4, 2); minWeeks.setEditable(true);
         Spinner<Integer> maxWeeks = new Spinner<>(2, 52, 8, 2); maxWeeks.setEditable(true);
+        Tooltip weeksTip = new Tooltip(
+            "Total weeks a resident must spend on this rotation across the year,\n" +
+            "in multiples of 2. A half-block = 2 weeks, a full block = 4 weeks.\n" +
+            "The solver converts weeks into 2-week scheduling slots automatically.");
+        Tooltip.install(minWeeks, weeksTip);
+        Tooltip.install(maxWeeks, weeksTip);
         TextArea descArea = new TextArea(); descArea.setPromptText("Optional description");
         descArea.setPrefRowCount(3); descArea.setWrapText(true);
 

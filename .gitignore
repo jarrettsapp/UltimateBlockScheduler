@@ -33,14 +33,20 @@ releases/
 .DS_Store
 Thumbs.db
 
-# Database
+# Database (including SQLite WAL-mode sidecar files)
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite
 *.sqlite3
 
 # JVM
 hs_err_*.log
 *.hprof
+
+# Runtime logs (e.g. launch.log)
+*.log
 
 # Build
 build/

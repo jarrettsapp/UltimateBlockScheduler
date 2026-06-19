@@ -52,10 +52,14 @@ public class SchedulingService {
         int totalBlocksOnRotation = assignmentDAO.countBlocksByResidentAndRotation(residentId, rotationId);
 
         // Check PGY-specific rule first, fall back to rotation default.
-        // PGY rules store in blocks; rotation defaults store in weeks — convert weeks to blocks via /4.
+        // PGY requirements (req.getMin/MaxBlocks) are already expressed in 2-week slots,
+        // matching countBlocksByResidentAndRotation (which counts 2-week assignment rows).
+        // Rotation defaults are entered in WEEKS, so convert weeks -> slots via ScheduleUnits.
+        // NOTE: this previously divided by 4, enforcing only HALF the intended cap here while
+        // CP-SAT used /2 — the two validators disagreed. See REVIEW.md H2.
         RotationRequirement req = rulesDAO.getRequirement(rotationId, resident.getPgyLevel());
-        int effectiveMax = (req != null) ? (int)Math.ceil(req.getMaxBlocks()) : Math.max(1, rotation.getMaxBlocksAllowed() / 4);
-        int effectiveMin = (req != null) ? (int)Math.ceil(req.getMinBlocks()) : Math.max(0, rotation.getMinBlocksRequired() / 4);
+        int effectiveMax = (req != null) ? (int)Math.ceil(req.getMaxBlocks()) : Math.max(1, ScheduleUnits.weeksToSlots(rotation.getMaxBlocksAllowed()));
+        int effectiveMin = (req != null) ? (int)Math.ceil(req.getMinBlocks()) : Math.max(0, ScheduleUnits.weeksToSlots(rotation.getMinBlocksRequired()));
 
         if (totalBlocksOnRotation >= effectiveMax) {
             result.addIssue(ValidationResult.Severity.WARNING,
