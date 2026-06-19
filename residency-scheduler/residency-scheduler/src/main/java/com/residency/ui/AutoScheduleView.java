@@ -91,13 +91,12 @@ public class AutoScheduleView extends BorderPane {
     private final VBox   csProgressRows = new VBox(2);
     private volatile boolean csSolving = false;
 
-    // Per-phase time limits (seconds; 0 = unlimited). Max raised to 3600 (1 hr/phase) so
-    // capacity-constrained solves, which need long Phase-1 (clinical) and Phase-3 (coverage)
-    // budgets, can be configured from the UI. See the preset buttons below.
-    private final Spinner<Integer> tier0Spinner = new Spinner<>(0, 3600, 60,  15);
-    private final Spinner<Integer> tier1Spinner = new Spinner<>(0, 3600, 120, 30);
-    private final Spinner<Integer> tier2Spinner = new Spinner<>(0, 3600, 120, 30);
-    private final Spinner<Integer> tier3Spinner = new Spinner<>(0, 3600, 60,  15);
+    // Per-phase time limits (seconds; 0 = unlimited). Max raised to 7200 (2 hr/phase) so
+    // long overnight solves can be configured from the UI. See the preset buttons below.
+    private final Spinner<Integer> tier0Spinner = new Spinner<>(0, 7200, 60,  15);
+    private final Spinner<Integer> tier1Spinner = new Spinner<>(0, 7200, 120, 30);
+    private final Spinner<Integer> tier2Spinner = new Spinner<>(0, 7200, 120, 30);
+    private final Spinner<Integer> tier3Spinner = new Spinner<>(0, 7200, 60,  15);
     private VBox feasibilityContent;
     private TitledPane feasibilityPane;
 
@@ -266,15 +265,16 @@ public class AutoScheduleView extends BorderPane {
             sp.setPrefWidth(72);
             sp.setEditable(true);
         }
-        // Quick presets for the four phase limits (t0,t1,t2,t3 seconds). Long/Overnight give
-        // Phase 1 (clinical) and Phase 3 (coverage) the budgets the capacity-constrained model
-        // needs to reach a good schedule.
-        Button presetQuick     = phasePreset("Quick",     60,  120,  60,  60);
-        Button presetStandard  = phasePreset("Standard",  90,  300, 120, 180);
-        Button presetLong      = phasePreset("Long",      90, 1200, 180, 1200);
-        Button presetOvernight = phasePreset("Overnight", 120, 1800, 300, 3600);
+        // Quick presets for the four phase limits (t0,t1,t2,t3 seconds). Long/Overnight/Ultra
+        // give Phase 1 (clinical) and Phase 3 (coverage) the budgets the capacity-constrained
+        // model needs to reach a good schedule.
+        Button presetQuick     = phasePreset("Quick",     60,  120,   60,   60);
+        Button presetStandard  = phasePreset("Standard",  90,  300,  120,  180);
+        Button presetLong      = phasePreset("Long",      90, 1200,  180, 1200);
+        Button presetOvernight = phasePreset("Overnight", 120, 1800,  300, 3600);
+        Button presetUltra     = phasePreset("Ultra",     120, 7200,  300, 7200);
         HBox presets = new HBox(6,
-            new Label("Presets:"), presetQuick, presetStandard, presetLong, presetOvernight);
+            new Label("Presets:"), presetQuick, presetStandard, presetLong, presetOvernight, presetUltra);
         presets.setAlignment(Pos.CENTER_LEFT);
         presets.setStyle("-fx-font-size:10px;");
 
