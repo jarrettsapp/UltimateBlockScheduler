@@ -48,6 +48,7 @@ public class ScheduleConfigDAO extends BaseDAO {
         upsertKey("discouraged_after_trigger_ids", joinIds(cfg.getDiscouragedAfterTriggerIds()));
         upsertKey("weight_sunday_coverage",  String.valueOf(cfg.getWeightSundayCoverage()));
         upsertKey("sunday_coverage_target",  String.valueOf(cfg.getSundayCoverageTarget()));
+        upsertKey("weight_categorical_soft_excess", String.valueOf(cfg.getWeightCategoricalSoftExcess()));
         upsertKey("enforce_zero_volunteer_weekends", String.valueOf(cfg.isEnforceZeroVolunteerWeekends()));
         upsertKey("max_consec_heavy_medium_weeks",  String.valueOf(cfg.getMaxConsecutiveHeavyMediumWeeks()));
         upsertKey("max_consec_heavy_medium_hard",   String.valueOf(cfg.isMaxConsecHeavyMediumHard()));
@@ -87,8 +88,8 @@ public class ScheduleConfigDAO extends BaseDAO {
                  min_per_week, max_per_week, optional_full_year,
                  no_back_to_back_half_blocks, require_break_between_segments,
                  mutually_non_adjacent_with, max_consecutive_weeks, earliest_start_block,
-                 require_even_block_start, categorical_max_per_block)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 require_even_block_start, categorical_max_per_block, categorical_soft_cap)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(rotation_id) DO UPDATE SET
                 allowed_block_lengths=excluded.allowed_block_lengths,
                 requires_consecutive=excluded.requires_consecutive,
@@ -101,7 +102,8 @@ public class ScheduleConfigDAO extends BaseDAO {
                 max_consecutive_weeks=excluded.max_consecutive_weeks,
                 earliest_start_block=excluded.earliest_start_block,
                 require_even_block_start=excluded.require_even_block_start,
-                categorical_max_per_block=excluded.categorical_max_per_block
+                categorical_max_per_block=excluded.categorical_max_per_block,
+                categorical_soft_cap=excluded.categorical_soft_cap
             """;
         try (PreparedStatement ps = getConn().prepareStatement(sql)) {
             ps.setInt(1, policy.rotationId);
@@ -118,6 +120,7 @@ public class ScheduleConfigDAO extends BaseDAO {
             ps.setInt(11, policy.earliestStartBlock);
             ps.setInt(12, policy.requireEvenBlockStart ? 1 : 0);
             ps.setInt(13, policy.categoricalMaxPerBlock);
+            ps.setInt(14, policy.categoricalSoftCap);
             ps.executeUpdate();
         }
         // Save PGY caps
@@ -196,6 +199,7 @@ public class ScheduleConfigDAO extends BaseDAO {
                 case "discouraged_after_trigger_ids" -> cfg.setDiscouragedAfterTriggerIds(parseIds(value));
                 case "weight_sunday_coverage"  -> cfg.setWeightSundayCoverage(Integer.parseInt(value));
                 case "sunday_coverage_target"  -> cfg.setSundayCoverageTarget(Integer.parseInt(value));
+                case "weight_categorical_soft_excess" -> cfg.setWeightCategoricalSoftExcess(Integer.parseInt(value));
                 case "enforce_zero_volunteer_weekends" -> cfg.setEnforceZeroVolunteerWeekends(Boolean.parseBoolean(value));
                 case "max_consec_heavy_medium_weeks"  -> cfg.setMaxConsecutiveHeavyMediumWeeks(Integer.parseInt(value));
                 case "max_consec_heavy_medium_hard"   -> cfg.setMaxConsecHeavyMediumHard(Boolean.parseBoolean(value));
@@ -274,6 +278,8 @@ public class ScheduleConfigDAO extends BaseDAO {
         try { p.requireEvenBlockStart = rs.getInt("require_even_block_start") == 1; }
         catch (SQLException ignored) {}
         try { p.categoricalMaxPerBlock = rs.getInt("categorical_max_per_block"); }
+        catch (SQLException ignored) {}
+        try { p.categoricalSoftCap = rs.getInt("categorical_soft_cap"); }
         catch (SQLException ignored) {}
         return p;
     }
