@@ -583,7 +583,10 @@ public class CpSatSchedulerEngine {
             status0, (System.currentTimeMillis() - startMs) / 1000.0));
 
         if (status0 == CpSolverStatus.INFEASIBLE) {
-            onProgress.accept("Phase 0 INFEASIBLE — no feasible assignment exists. Check solver log.");
+            onProgress.accept("Phase 0 INFEASIBLE — running stepwise diagnosis to locate the conflict…");
+            solverLog.append("\n═══ STEPWISE FEASIBILITY DIAGNOSIS (model proved INFEASIBLE) ═══\n");
+            runStepwiseDiagnosis(solverLog, residents, rotations, config, reqMap, prereqMap,
+                eligibleByRotation, rotationLengths, seqMap, auxCoverage, totalBlocks);
             ScheduleSolution sol = new ScheduleSolution();
             sol.setStatus(ScheduleSolution.Status.INFEASIBLE);
             sol.setFeasibilityReport(feasReport);
@@ -897,6 +900,11 @@ public class CpSatSchedulerEngine {
         CpSolver solver = new CpSolver();
         solver.getParameters().setNumWorkers(config.getCpSatNumWorkers());
         solver.getParameters().setLogToStdout(false);
+        // Adopt + repair the warm-start hint into a feasible incumbent. Without this, a hinted
+        // phase (esp. Phase 3, locked to Tier-1/Tier-2 ≤ best) could spend its whole budget
+        // without ever turning the prior phase's solution into an incumbent and return UNKNOWN,
+        // forcing a fallback to the un-optimized earlier phase. Harmless when no hint is set.
+        solver.getParameters().setRepairHint(true);
         if (timeLimitSec > 0) solver.getParameters().setMaxTimeInSeconds(timeLimitSec);
         return solver;
     }
@@ -1173,10 +1181,9 @@ public class CpSatSchedulerEngine {
             }
         }
 
-        solverLog.append("\n═══ STEPWISE FEASIBILITY DIAGNOSIS ═══\n");
-        runStepwiseDiagnosis(solverLog, residents, rotations, config, reqMap, prereqMap,
-            eligibleByRotation, rotationLengths, seqMap, auxCoverage, totalBlocks);
-
+        // The expensive stepwise/removal diagnosis is deferred: it only adds value when the
+        // model is INFEASIBLE, and on a tight-but-feasible model it wastes minutes timing out
+        // on each step. It now runs only from the Phase-0 INFEASIBLE branch.
         solverLog.append("\n═══ FOUR-PHASE SOLVER LOG ═══\n");
     }
 
