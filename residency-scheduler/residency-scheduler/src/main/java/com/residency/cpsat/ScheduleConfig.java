@@ -56,11 +56,11 @@ public class ScheduleConfig {
 
     /**
      * Maximum number of consecutive weeks (combining heavy + medium tiers) a categorical
-     * resident may be assigned without a light-rotation break.
-     * 0 = disabled.  Typical values: 4 / 6 / 8 / 10.
-     * Applies to categorical residents only (is_auxiliary = false, resident_group != BMC).
+     * resident may be assigned without a light-rotation break. This is the true max run: a
+     * value of 12 permits e.g. 4 heavy → 4 medium → 4 heavy (12 wk) but forbids a 14th.
+     * 0 = disabled.  Applies to categorical residents only (is_auxiliary = false, group != BMC).
      */
-    private int maxConsecutiveHeavyMediumWeeks = 8;
+    private int maxConsecutiveHeavyMediumWeeks = 12;
 
     /**
      * When true the limit above is a HARD constraint (solver must obey).

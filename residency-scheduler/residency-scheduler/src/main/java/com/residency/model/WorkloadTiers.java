@@ -44,6 +44,15 @@ public final class WorkloadTiers {
         return idsFor(rotations, SUNDAY_SOURCE);
     }
 
+    /** Resolve the combined heavy + medium (consult) rotation IDs present in {@code rotations}. */
+    public static Set<Integer> heavyOrMediumIds(List<Rotation> rotations) {
+        Set<Integer> ids = new HashSet<>();
+        for (Rotation r : rotations) {
+            if (HEAVY.contains(r.getName()) || MEDIUM.contains(r.getName())) ids.add(r.getId());
+        }
+        return ids;
+    }
+
     private static Set<Integer> idsFor(List<Rotation> rotations, Set<String> names) {
         Set<Integer> ids = new HashSet<>();
         for (Rotation r : rotations) {

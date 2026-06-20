@@ -646,18 +646,16 @@ public class ConstraintBuilder {
         int limitWeeks = config.getMaxConsecutiveHeavyMediumWeeks();
         if (limitWeeks <= 0) return List.of();
 
-        // Convert weeks to 2-week slots; require at least 1 light slot per window
-        // so the window size must be > 1 slot (i.e. limit must be > 2 weeks).
+        // limitWeeks is the maximum allowed consecutive heavy+medium RUN. In 2-week slots that
+        // is limitSlots; we forbid any window of (limitSlots + 1) slots from being entirely
+        // heavy/medium, which caps the run at exactly limitSlots slots = limitWeeks weeks.
         int limitSlots = limitWeeks / 2;
-        if (limitSlots <= 1) return List.of(); // limit of 2wk or less is always met
+        if (limitSlots <= 0) return List.of();           // no positive slot limit
+        int windowSize = limitSlots + 1;
+        if (windowSize > totalBlocks) return List.of();  // window never fits → unconstrained
 
-        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
-            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
-        Set<String> mediumNames = Set.of("Inpatient GI", "Infectious Disease");
-
-        Set<Integer> hmIds = rotations.stream()
-            .filter(r -> heavyNames.contains(r.getName()) || mediumNames.contains(r.getName()))
-            .map(Rotation::getId).collect(Collectors.toSet());
+        // Heavy + medium (consult) tiers from the authoritative list (not rotation_type).
+        Set<Integer> hmIds = WorkloadTiers.heavyOrMediumIds(rotations);
         if (hmIds.isEmpty()) return List.of();
 
         // Only categorical residents (not auxiliary, not BMC group).
@@ -689,23 +687,23 @@ public class ConstraintBuilder {
                 hm[b] = hmB;
             }
 
-            // Sliding window of limitSlots: sum(hm[b..b+limitSlots-1]) <= limitSlots-1
-            for (int b = 0; b + limitSlots <= totalBlocks; b++) {
-                BoolVar[] window = new BoolVar[limitSlots];
-                for (int k = 0; k < limitSlots; k++) window[k] = hm[b + k];
+            // Sliding window of (limitSlots+1) slots: forbid the whole window being heavy/medium,
+            // i.e. sum <= limitSlots, which caps the run at limitSlots slots = limitWeeks weeks.
+            for (int b = 0; b + windowSize <= totalBlocks; b++) {
+                BoolVar[] window = new BoolVar[windowSize];
+                for (int k = 0; k < windowSize; k++) window[k] = hm[b + k];
                 LinearExpr windowSum = LinearExpr.sum(window);
 
                 if (isHard) {
-                    model.addLinearConstraint(windowSum, 0, limitSlots - 1);
+                    model.addLinearConstraint(windowSum, 0, limitSlots);
                 } else {
-                    // Soft: create a violation indicator = 1 iff all slots in window are H/M.
+                    // Soft: violation indicator = 1 iff all (limitSlots+1) slots are H/M.
                     BoolVar viol = model.newBoolVar(
                         String.format("hmviol_r%d_b%d", r.getId(), b));
-                    // viol <= each hm[b+k]  (viol can only be 1 if all are 1)
                     for (BoolVar w : window) model.addLessOrEqual(viol, w);
-                    // viol >= sum(window) - (limitSlots-1)  (forced to 1 when all are H/M)
+                    // viol >= sum(window) - limitSlots  (forced to 1 when the whole window is H/M)
                     model.addGreaterOrEqual(
-                        LinearExpr.newBuilder().add(viol).add(limitSlots - 1).build(),
+                        LinearExpr.newBuilder().add(viol).add(limitSlots).build(),
                         windowSum);
                     softViolations.add(viol);
                 }
