@@ -14,18 +14,6 @@ public class ScheduleSolution {
     // residentId -> rotationId -> list of assigned week indices
     private final Map<Integer, Map<Integer, List<Integer>>> assignments = new LinkedHashMap<>();
 
-    // ── Coverage metrics ───────────────────────────────────────────────────
-    // rotationId -> week -> count of residents assigned
-    private final Map<Integer, Map<Integer, Integer>> weeklyCoverage = new LinkedHashMap<>();
-
-    // ── Workload summary ───────────────────────────────────────────────────
-    // residentId -> total assigned weeks
-    private final Map<Integer, Integer> residentWorkload = new LinkedHashMap<>();
-
-    // ── Constraint violations ──────────────────────────────────────────────
-    private final List<String> softViolations = new ArrayList<>();
-    private final List<String> hardViolations = new ArrayList<>();
-
     // ── Solver metadata ────────────────────────────────────────────────────
     private Status status = Status.UNKNOWN;
     private double objectiveValue = 0;
@@ -44,20 +32,10 @@ public class ScheduleSolution {
             .computeIfAbsent(residentId, k -> new LinkedHashMap<>())
             .computeIfAbsent(rotationId, k -> new ArrayList<>())
             .add(week);
-        weeklyCoverage
-            .computeIfAbsent(rotationId, k -> new LinkedHashMap<>())
-            .merge(week, 1, Integer::sum);
-        residentWorkload.merge(residentId, 1, Integer::sum);
     }
 
     public boolean isFeasible() {
         return status == Status.OPTIMAL || status == Status.FEASIBLE;
-    }
-
-    public int getWeeklyCoverageFor(int rotationId, int week) {
-        return weeklyCoverage
-            .getOrDefault(rotationId, Map.of())
-            .getOrDefault(week, 0);
     }
 
     public List<Integer> getAssignedWeeks(int residentId, int rotationId) {
@@ -66,17 +44,7 @@ public class ScheduleSolution {
             .getOrDefault(rotationId, List.of());
     }
 
-    public int getTotalWeeksAssigned(int residentId) {
-        return residentWorkload.getOrDefault(residentId, 0);
-    }
-
     public Map<Integer, Map<Integer, List<Integer>>> getAssignments() { return assignments; }
-    public Map<Integer, Map<Integer, Integer>> getWeeklyCoverage()    { return weeklyCoverage; }
-    public Map<Integer, Integer> getResidentWorkload()                { return residentWorkload; }
-    public List<String> getSoftViolations()                           { return softViolations; }
-    public List<String> getHardViolations()                           { return hardViolations; }
-    public void addSoftViolation(String v)                            { softViolations.add(v); }
-    public void addHardViolation(String v)                            { hardViolations.add(v); }
 
     public Status getStatus()                        { return status; }
     public void setStatus(Status v)                  { this.status = v; }

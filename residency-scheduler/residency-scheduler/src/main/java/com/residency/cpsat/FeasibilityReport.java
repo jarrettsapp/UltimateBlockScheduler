@@ -55,12 +55,4 @@ public class FeasibilityReport {
     public void setTotalResidentWeeksAvailable(int v) { this.totalResidentWeeksAvailable = v; }
     public int getTotalResidentWeeksRequired()      { return totalResidentWeeksRequired; }
     public void setTotalResidentWeeksRequired(int v)  { this.totalResidentWeeksRequired = v; }
-
-    public String summary() {
-        if (issues.isEmpty()) return "✅ No feasibility issues detected.";
-        StringBuilder sb = new StringBuilder();
-        sb.append("⚠ ").append(issues.size()).append(" issue(s) detected:\n");
-        for (Issue i : issues) sb.append("  • ").append(i).append("\n");
-        return sb.toString();
-    }
 }
