@@ -149,6 +149,23 @@ public class CpSatSchedulerEngine {
         auxFillerRotationDAO = new AuxFillerRotationDAO();
     }
 
+    /**
+     * Populate the authoritative heavy / Sunday-source tier ID lists from {@link WorkloadTiers}
+     * (resolved by rotation name) when the DB config leaves them empty. Without this the
+     * Sunday-coverage objective ({@link ObjectiveFunctionBuilder#buildSundayCoverageObjective})
+     * silently disables itself: there is no UI to set these IDs, so the normal empty-config case
+     * meant the objective never ran even with a non-zero weight, while the hard
+     * {@code applyZeroVolunteerFloor} already resolved heavy rotations by name. This brings the
+     * soft objective (and every other config reader) in line. A non-empty config is left
+     * untouched, so an explicit override still wins.
+     */
+    static void applyTierDefaults(ScheduleConfig config, List<Rotation> rotations) {
+        if (config.getHeavyRotationIds().isEmpty())
+            config.setHeavyRotationIds(WorkloadTiers.heavyIds(rotations));
+        if (config.getSundaySourceRotationIds().isEmpty())
+            config.setSundaySourceRotationIds(WorkloadTiers.sundaySourceIds(rotations));
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     //  Internal data carriers
     // ══════════════════════════════════════════════════════════════════════
@@ -256,6 +273,7 @@ public class CpSatSchedulerEngine {
         List<RotationSequenceRule> sequenceRules = rulesDAO.getAllSequenceRules();
         if (residents.isEmpty() || rotations.isEmpty() || blocks.isEmpty())
             return new CoverageFloorResult(CpSolverStatus.MODEL_INVALID, -1, false, "No data for year " + year);
+        applyTierDefaults(config, rotations);
 
         int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR;
         config.setTotalBlocks(totalBlocks);
@@ -283,11 +301,7 @@ public class CpSatSchedulerEngine {
         VariableFactory vf = mc.varFactory();
 
         // Heavy rotation ids (authoritative tier list, by name).
-        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
-            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
-        Set<Integer> heavyIds = rotations.stream()
-            .filter(r -> heavyNames.contains(r.getName())).map(Rotation::getId)
-            .collect(Collectors.toSet());
+        Set<Integer> heavyIds = WorkloadTiers.heavyIds(rotations);
 
         // heavy[r][b] = 1 iff resident r is on any heavy rotation at slot b.
         // coverer[r][b] (weekend b) = 1 iff NOT heavy@b AND NOT heavy@b+1.
@@ -346,7 +360,7 @@ public class CpSatSchedulerEngine {
             model.addEquality(volunteerTotal, 0);
 
             Set<Integer> medNames = rotations.stream()
-                .filter(r -> r.getName().equals("Inpatient GI") || r.getName().equals("Infectious Disease"))
+                .filter(r -> WorkloadTiers.MEDIUM.contains(r.getName()))
                 .map(Rotation::getId).collect(Collectors.toSet());
             List<BoolVar> heavyHeavy = new ArrayList<>();
             // Build heavy/medium indicator per resident-slot and the heavy→diff-heavy terms.
@@ -495,6 +509,7 @@ public class CpSatSchedulerEngine {
             empty.setSolverLog("No residents, rotations, or blocks found for year " + year);
             return empty;
         }
+        applyTierDefaults(config, rotations);
 
         int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR; // 26 two-week slots = one academic year
         config.setTotalBlocks(totalBlocks);

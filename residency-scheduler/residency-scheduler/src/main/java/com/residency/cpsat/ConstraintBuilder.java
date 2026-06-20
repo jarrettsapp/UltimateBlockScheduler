@@ -119,11 +119,7 @@ public class ConstraintBuilder {
     public void applyZeroVolunteerFloor(List<Resident> residents, List<Rotation> rotations) {
         if (!config.isEnforceZeroVolunteerWeekends()) return;
 
-        Set<String> heavyNames = Set.of("ICU", "VA", "Broadlawns",
-            "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
-        Set<Integer> heavyIds = rotations.stream()
-            .filter(r -> heavyNames.contains(r.getName()))
-            .map(Rotation::getId).collect(Collectors.toSet());
+        Set<Integer> heavyIds = WorkloadTiers.heavyIds(rotations);
         if (heavyIds.isEmpty()) return;
 
         for (int b = 0; b + 1 < totalBlocks; b++) {

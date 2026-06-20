@@ -1,5 +1,7 @@
 package com.residency.service;
 
+import com.residency.model.WorkloadTiers;
+
 import java.util.*;
 
 /**
@@ -17,15 +19,11 @@ public final class ScheduleMetrics {
 
     public static final int SLOTS = 26;
 
-    // Authoritative workload tiers (by rotation name).
-    public static final Set<String> HEAVY = Set.of(
-        "ICU", "VA", "Broadlawns", "Younker 7 Days", "Younker 7 Nights", "Younker 8 Pulmonology");
-    public static final Set<String> MEDIUM = Set.of("Inpatient GI", "Infectious Disease");
-    // Sunday-call source rotations (a covering categorical may be on any of these).
-    public static final Set<String> SUNDAY_SOURCE = Set.of(
-        "Inpatient GI", "Infectious Disease",
-        "Outpatient GI", "Outpatient Pulmonology", "Ambulatory A", "Emergency Medicine",
-        "Addiction Medicine", "Elective", "Outpatient TIC Cardiology", "Outpatient UPH Cardiology");
+    // Authoritative workload tiers (by rotation name) — single source of truth in WorkloadTiers,
+    // shared with the solver's eligibility model so the reporter and solver cannot diverge.
+    public static final Set<String> HEAVY = WorkloadTiers.HEAVY;
+    public static final Set<String> MEDIUM = WorkloadTiers.MEDIUM;
+    public static final Set<String> SUNDAY_SOURCE = WorkloadTiers.SUNDAY_SOURCE;
 
     public enum Tier { HEAVY, MEDIUM, LIGHT }
 
