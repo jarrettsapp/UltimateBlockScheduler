@@ -37,6 +37,14 @@ public class ScheduleConfig {
     /** Target number of eligible Sunday coverers per weekend; shortfall below this is penalized. */
     private int sundayCoverageTarget = 2;
     /**
+     * Penalty per categorical resident assigned beyond a rotation's
+     * {@link RotationPolicy#categoricalSoftCap}, per block (Tier-3 soft objective). Lets a
+     * rotation "prefer N categoricals but allow more when it helps" — e.g. VA prefers 2 but
+     * may take a 3rd (up to the hard {@link RotationPolicy#categoricalMaxPerBlock}) when that
+     * improves weekend coverage. Only fires for rotations with categoricalSoftCap &gt; 0.
+     */
+    private int weightCategoricalSoftExcess = 5;
+    /**
      * When true, the solver enforces a HARD floor of ZERO volunteer weekends — every weekend
      * must have at least one eligible categorical Sunday-Y7 coverer (on a Sunday-source
      * rotation, not heavy that block, not entering heavy the next block). Proven achievable
@@ -137,6 +145,12 @@ public class ScheduleConfig {
          * categorical (a TY may add a 2nd body up to the total cap), VA = 2 categoricals.
          */
         public int categoricalMaxPerBlock = 0;
+        /**
+         * Preferred (soft) maximum categoricals per block. Categoricals beyond this level are
+         * still allowed up to {@link #categoricalMaxPerBlock} but are penalized in Phase 3 by
+         * {@code weightCategoricalSoftExcess}. 0 = no soft cap.
+         */
+        public int categoricalSoftCap = 0;
         public Map<Integer, int[]> pgyMinMax = new HashMap<>(); // pgy -> [min, max] per block
 
         /** Prevent a 1-block segment immediately followed by another 1-block segment of the same rotation. */
@@ -204,6 +218,9 @@ public class ScheduleConfig {
 
     public int getSundayCoverageTarget()             { return sundayCoverageTarget; }
     public void setSundayCoverageTarget(int v)       { this.sundayCoverageTarget = v; }
+
+    public int getWeightCategoricalSoftExcess()      { return weightCategoricalSoftExcess; }
+    public void setWeightCategoricalSoftExcess(int v) { this.weightCategoricalSoftExcess = v; }
 
     public boolean isEnforceZeroVolunteerWeekends()        { return enforceZeroVolunteerWeekends; }
     public void setEnforceZeroVolunteerWeekends(boolean v) { this.enforceZeroVolunteerWeekends = v; }

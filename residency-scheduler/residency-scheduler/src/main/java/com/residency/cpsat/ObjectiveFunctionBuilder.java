@@ -489,6 +489,53 @@ public class ObjectiveFunctionBuilder {
         return shortfallTotal;
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    //  Tier 3 — categorical soft-cap excess
+    //  Returns an IntVar = Σ over rotations (categoricalSoftCap > 0) and blocks of
+    //  max(0, categoricalCount − softCap). Does NOT minimize — folded into Phase 3.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Penalizes categoricals assigned beyond a rotation's soft cap. A rotation may set
+     * {@code categoricalSoftCap = N} to "prefer ≤ N categoricals per block" while still
+     * allowing more, up to its hard {@code categoricalMaxPerBlock}; each categorical above N in
+     * a block adds 1 to this count (weighted by weightCategoricalSoftExcess in Phase 3). So a
+     * 3rd categorical on a soft-cap-2 rotation is permitted but discouraged — taken only when
+     * it buys enough elsewhere (e.g. fewer fragile weekends). Zero IntVar when no rotation
+     * sets a soft cap.
+     */
+    public IntVar buildCategoricalSoftCapObjective(List<Resident> residents, List<Rotation> rotations) {
+        List<IntVar> excesses = new ArrayList<>();
+        for (Rotation s : rotations) {
+            int softCap = config.getPolicyFor(s.getId()).categoricalSoftCap;
+            if (softCap <= 0) continue;
+            for (int b = 0; b < totalBlocks; b++) {
+                List<BoolVar> occs = new ArrayList<>();
+                for (Resident r : residents) {
+                    BoolVar occ = vars.getOccupancyVar(r.getId(), s.getId(), b);
+                    if (occ != null) occs.add(occ);
+                }
+                if (occs.size() <= softCap) continue; // count can never exceed the cap here
+                IntVar excess = model.newIntVar(0, occs.size() - softCap,
+                    String.format("t3_catsoft_s%d_b%d", s.getId(), b));
+                // excess + softCap ≥ Σ occ  →  excess ≥ count − softCap; with domain ≥ 0 and
+                // minimization this yields excess = max(0, count − softCap).
+                model.addGreaterOrEqual(
+                    LinearExpr.newBuilder().add(excess).add(softCap).build(),
+                    LinearExpr.sum(occs.toArray(new BoolVar[0])));
+                excesses.add(excess);
+            }
+        }
+        IntVar total = model.newIntVar(0,
+            (long) Math.max(1, residents.size()) * Math.max(1, totalBlocks), "tier3_catsoft_total");
+        if (excesses.isEmpty()) {
+            model.addEquality(total, 0);
+        } else {
+            model.addEquality(total, LinearExpr.sum(excesses.toArray(new IntVar[0])));
+        }
+        return total;
+    }
+
     public Map<String, IntVar> getUndercoverageVars() { return undercoverageVars; }
     public Map<String, IntVar> getOvercoverageVars()  { return overcoverageVars;  }
 }

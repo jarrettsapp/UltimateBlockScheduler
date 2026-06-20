@@ -708,6 +708,9 @@ public class CpSatSchedulerEngine {
         // Sunday coverage shortfall: penalises weekends below the coverer target.
         // Disabled (zero weight or missing tier lists) unless configured.
         IntVar sundayShortfall = obj3.buildSundayCoverageObjective(residents);
+        // Categorical soft-cap excess: discourages (but allows) categoricals beyond a
+        // rotation's preferred level, e.g. a 3rd VA categorical above its soft cap of 2.
+        IntVar catSoftExcess = obj3.buildCategoricalSoftCapObjective(residents, rotations);
         // Max-consec heavy+medium soft violations: each over-limit window slot costs
         // weightMaxConsecHeavyMedium. Empty list when disabled or in hard mode.
         ConstraintBuilder cb3 = new ConstraintBuilder(
@@ -718,7 +721,8 @@ public class CpSatSchedulerEngine {
                 : List.of();
         LinearExprBuilder obj3Expr = LinearExpr.newBuilder()
             .add(patternCost)
-            .addTerm(sundayShortfall, config.getWeightSundayCoverage());
+            .addTerm(sundayShortfall, config.getWeightSundayCoverage())
+            .addTerm(catSoftExcess, config.getWeightCategoricalSoftExcess());
         if (!hmViolations.isEmpty()) {
             int wHM = config.getWeightMaxConsecHeavyMedium();
             for (var v : hmViolations) obj3Expr.addTerm(v, wHM);
