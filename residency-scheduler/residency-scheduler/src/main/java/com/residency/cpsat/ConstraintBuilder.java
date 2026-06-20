@@ -150,6 +150,41 @@ public class ConstraintBuilder {
         }
     }
 
+    /**
+     * Hard ban on a HEAVY rotation immediately followed by a DIFFERENT heavy rotation — the
+     * program's absolute "no heavy → different-heavy jump" rule. Heavy membership comes from
+     * {@link WorkloadTiers#HEAVY} (the authoritative tier list, NOT rotation_type), so the
+     * medium/consult rotations Inpatient GI and Infectious Disease are never treated as heavy.
+     * Continuing the SAME heavy rotation across a block boundary is allowed (a continuation,
+     * not a jump).
+     *
+     * <p>This was previously only a soft Phase-1 penalty (weightInpatientSplit), which a
+     * time-limited Phase 1 could leave unsatisfied (e.g. a budget-starved run ending with 5
+     * such transitions). Making it hard guarantees zero heavy→different-heavy transitions
+     * regardless of solve budget; it is proven feasible alongside the zero-volunteer floor
+     * (every run that gave Phase 1 enough time has reached 0).
+     */
+    public void applyHeavyToHeavyBan(List<Resident> residents, List<Rotation> rotations) {
+        List<Integer> heavyIds = new ArrayList<>(WorkloadTiers.heavyIds(rotations));
+        if (heavyIds.size() < 2) return;
+        for (Resident r : residents) {
+            for (int b = 0; b + 1 < totalBlocks; b++) {
+                for (int h1 : heavyIds) {
+                    BoolVar occ1 = vars.getOccupancyVar(r.getId(), h1, b);
+                    if (occ1 == null) continue;
+                    for (int h2 : heavyIds) {
+                        if (h1 == h2) continue;
+                        BoolVar occ2 = vars.getOccupancyVar(r.getId(), h2, b + 1);
+                        if (occ2 == null) continue;
+                        // Forbid: heavy h1 at block b AND different heavy h2 at block b+1.
+                        model.addLessOrEqual(
+                            LinearExpr.newBuilder().add(occ1).add(occ2).build(), 1);
+                    }
+                }
+            }
+        }
+    }
+
     // ── 2. PGY-level block caps per rotation ──────────────────────────────
 
     public void applyPgyCapConstraints(List<Resident> residents, List<Rotation> rotations) {

@@ -202,6 +202,7 @@ public class CpSatSchedulerEngine {
             new ConstraintStep("Coverage min/max per block",      cb -> cb.applyCoverageConstraints(residents, rotations)),
             new ConstraintStep("Categorical-only per-block caps", cb -> cb.applyCategoricalCapConstraints(residents, rotations)),
             new ConstraintStep("Zero-volunteer-weekend floor",    cb -> cb.applyZeroVolunteerFloor(residents, rotations)),
+            new ConstraintStep("No heavy→different-heavy",        cb -> cb.applyHeavyToHeavyBan(residents, rotations)),
             new ConstraintStep("PGY cap constraints",             cb -> cb.applyPgyCapConstraints(residents, rotations)),
             new ConstraintStep("Workload caps",                   cb -> cb.applyWorkloadCapConstraints(residents, rotations)),
             new ConstraintStep("Max blocks per resident",         cb -> cb.applyMaxBlocksPerResidentConstraints(residents, rotations, reqMap)),
