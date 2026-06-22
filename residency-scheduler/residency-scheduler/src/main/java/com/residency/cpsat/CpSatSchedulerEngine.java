@@ -734,7 +734,20 @@ public class CpSatSchedulerEngine {
 
         CpSolver solver3 = configureSolver(config, tier3LimitSec);
         activeSolver = solver3;
-        CpSolverStatus status3 = solver3.solve(mc3.model());
+        // Optional Phase-3 objective trajectory capture (headless analysis). When the
+        // SOLVE_TRAJECTORY_CSV env var is set, record (elapsed_s, objective) on every
+        // improved incumbent so we can see where the objective plateaus and size budgets
+        // from data instead of guesswork. No-op (and zero overhead) when unset, so the UI
+        // is unaffected.
+        CpSolverStatus status3;
+        String trajPath = System.getenv("SOLVE_TRAJECTORY_CSV");
+        if (trajPath != null && !trajPath.isBlank()) {
+            TrajectoryCallback traj = new TrajectoryCallback(trajPath, startMs);
+            status3 = solver3.solve(mc3.model(), traj);
+            traj.close();
+        } else {
+            status3 = solver3.solve(mc3.model());
+        }
         activeSolver = null;
         solverLog.append(String.format("Phase 3 result: %s  (%.1fs)\n",
             status3, (System.currentTimeMillis() - startMs) / 1000.0));
@@ -907,6 +920,35 @@ public class CpSatSchedulerEngine {
         solver.getParameters().setRepairHint(true);
         if (timeLimitSec > 0) solver.getParameters().setMaxTimeInSeconds(timeLimitSec);
         return solver;
+    }
+
+    /**
+     * Records the Phase-3 objective trajectory to a CSV — one row per improved incumbent —
+     * so the objective-vs-time curve can be analyzed to size solve budgets from data.
+     * Columns: elapsed_s,objective,best_bound,wall_time_s (wall_time_s is CP-SAT's own clock).
+     * Append mode with a header written once; flushes each row so a killed run still keeps data.
+     */
+    private static final class TrajectoryCallback extends CpSolverSolutionCallback {
+        private final java.io.PrintWriter out;
+        private final long startMs;
+        TrajectoryCallback(String path, long startMs) {
+            this.startMs = startMs;
+            java.io.PrintWriter w = null;
+            try {
+                boolean existed = new java.io.File(path).exists();
+                w = new java.io.PrintWriter(new java.io.FileWriter(path, true), true); // autoflush
+                if (!existed) w.println("elapsed_s,objective,best_bound,cpsat_wall_s");
+            } catch (java.io.IOException e) {
+                LOG.log(java.util.logging.Level.WARNING, "Could not open trajectory CSV: " + path, e);
+            }
+            this.out = w;
+        }
+        @Override public void onSolutionCallback() {
+            if (out == null) return;
+            double elapsed = (System.currentTimeMillis() - startMs) / 1000.0;
+            out.printf("%.1f,%.1f,%.1f,%.2f%n", elapsed, objectiveValue(), bestObjectiveBound(), wallTime());
+        }
+        void close() { if (out != null) out.close(); }
     }
 
     // ══════════════════════════════════════════════════════════════════════
