@@ -204,7 +204,7 @@ Block expansion and no-overlap are applied first (via `BlockExpansionService`), 
 |-----------|---------------|---------|
 | Trigger rotation → mandatory-attendance next block | `weightPostCallHard` | 10 000 |
 | Trigger rotation → discouraged rotation next block | `weightPostCallSoft` | 300 |
-| Inpatient → different inpatient at block boundary | `weightInpatientSplit` | 50 |
+| Inpatient → different inpatient at block boundary | `weightInpatientSplit` | 15 |
 
 Configure trigger/mandatory/discouraged rotation sets in Settings → Post-Call Incompatibilities.
 
@@ -216,7 +216,7 @@ Configure trigger/mandatory/discouraged rotation sets in Settings → Post-Call 
 | Overcoverage (actual > max per block) | `weightOvercoverage` | 20 |
 | Workload variance across residents | `weightVariance` | 10 |
 | PGY-level imbalance per block | `weightPgyImbalance` | 15 |
-| Sunday call coverage below target (eligible coverers per weekend) | `weightSundayCoverage` / `sundayCoverageTarget` | 0 / 2 |
+| Sunday call coverage below target (eligible coverers per weekend) | `weightSundayCoverage` / `sundayCoverageTarget` | 150 / 2 |
 
 **Tier 3 — Pattern** (Phase 3):
 
@@ -237,7 +237,7 @@ Configure trigger/mandatory/discouraged rotation sets in Settings → Post-Call 
 | `weightFourPlusTwo` | 30 | Penalty per block that violates 2-inpatient/1-outpatient pattern (Tier 3) |
 | `weightPostCallHard` | 10 000 | Weighted penalty per trigger→mandatory post-call violation (Tier 1) |
 | `weightPostCallSoft` | 300 | Weighted penalty per trigger→discouraged post-call violation (Tier 1) |
-| `weightInpatientSplit` | 50 | Weighted penalty per inpatient→different-inpatient transition (Tier 1) |
+| `weightInpatientSplit` | 15 | Weighted penalty per inpatient→different-inpatient transition (Tier 1) |
 | `globalMinWorkloadBlocks` | 0 | Minimum blocks per resident per year |
 | `globalMaxWorkloadBlocks` | 24 | Maximum blocks per resident per year |
 | `cpSatNumWorkers` | 4 | Solver thread count |

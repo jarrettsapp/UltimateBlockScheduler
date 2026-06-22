@@ -21,7 +21,7 @@ public class ScheduleConfig {
     private int weightPgyImbalance  = 15;
     /** Penalty per block that violates the 2-inpatient / 1-outpatient cycle (block-scale 4+2). */
     private int weightFourPlusTwo   = 30;
-    private int weightInpatientSplit = 50;
+    private int weightInpatientSplit = 15;
     private int weightPostCallHard = 10000;
     private int weightPostCallSoft = 300;
     /**
@@ -33,7 +33,7 @@ public class ScheduleConfig {
      * scheduler can balance call-shift counts across residents rather than overloading the
      * lone eligible person on single-coverer weekends. 0 = disabled (Tier-3 soft term).
      */
-    private int weightSundayCoverage = 0;
+    private int weightSundayCoverage = 150;
     /** Target number of eligible Sunday coverers per weekend; shortfall below this is penalized. */
     private int sundayCoverageTarget = 2;
     /**
