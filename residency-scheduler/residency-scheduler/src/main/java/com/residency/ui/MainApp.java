@@ -25,15 +25,20 @@ public class MainApp extends Application {
         Tab autoTab        = new Tab("🤖 Auto-Scheduler",  autoScheduleView);
         Tab constraintTab  = new Tab("🔍 Constraints",     new ConstraintViewerPanel());
         Tab sweepTab       = new Tab("📈 Sweep Analysis",  new SweepAnalysisView());
+        SeedPoolView seedPoolView = new SeedPoolView();
+        Tab seedPoolTab    = new Tab("🌱 Seed Pool",       seedPoolView);
         Tab settingsTab    = new Tab("⚙️ Settings",         new ScheduleConfigView());
 
         tabPane.getTabs().addAll(scheduleTab, residentsTab, rotationsTab, rulesTab,
-            complianceTab, autoTab, constraintTab, sweepTab, settingsTab);
+            complianceTab, autoTab, constraintTab, sweepTab, seedPoolTab, settingsTab);
 
         // Refresh the Auto-Scheduler year picker whenever the user switches to that tab,
         // so any year generated on the Schedule tab is immediately visible and selected.
+        // Likewise reload the Seed Pool view on select, so it picks up seeds a concurrent
+        // seeding session may have written to the DB while this tab was open.
         tabPane.getSelectionModel().selectedItemProperty().addListener((obs, old, selected) -> {
             if (selected == autoTab) autoScheduleView.refreshYears();
+            else if (selected == seedPoolTab) { seedPoolView.refreshYears(); seedPoolView.reload(); }
         });
 
         BorderPane root = new BorderPane(tabPane);

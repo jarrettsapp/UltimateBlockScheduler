@@ -118,3 +118,57 @@ LOGIC that consumes it is deferred.
 - Never prune a seed on underpowered data (a feasible seed is expensive to collect).
 - Stepwise verification before scaling, same as the seeding ladder.
 ```
+
+## COLLECTION SCALING — cap stationarity vs diversity saturation (user discussion 2026-06-24)
+
+Two DIFFERENT "efficiencies" behave differently as the pool grows. Getting this distinction
+right determines what we monitor and what lever we pull when collection slows.
+
+### 1. Time-to-find-A-feasible-seed = STATIONARY (does NOT degrade)
+Each collect solve is an INDEPENDENT cold Phase-0 search with a fresh random seed; the solver
+has no memory of prior runs and the model is identical every time. So the expected time to find
+*a* feasible point is the SAME at run #2 and run #2000. **Consequence:** once we power the
+collection cap (Step 4b → n≈55), that cap stays valid for collection essentially forever — we do
+NOT need to re-derive it as the pool grows. (User's insight, correct.)
+
+### 2. Time-to-find-a-NEW (not-yet-cached) seed = DEGRADES with pool size
+The solver draws feasible points from an underlying distribution. Early on nearly every draw is
+new. As the pool fills, the solver increasingly RE-DISCOVERS points we already have; dedup
+correctly rejects them (`delta 0` on an `OPTIMAL` run). So even though each SOLVE costs the same,
+the cost per NEW seed climbs. This is **diversity saturation** — the real scaling limit, not
+solve time.
+
+### What to MONITOR (the right metric)
+Not time-to-feasible (stationary). Watch the **DUPLICATE RATE = fraction of `OPTIMAL` runs with
+`delta 0`.** Rising duplicate rate = the feasible space near our search is being exhausted.
+As of n=35+ runs / 34 seeds: duplicate rate = 0% (feasible space vast relative to pool). Expect
+this to stay ~0 for a long while, then rise.
+
+### What to ADJUST when saturation appears (the right lever — NOT the cap)
+When duplicates start climbing, the fix is **seed-exclusion constraints**, not a longer cap:
+add the existing pooled assignments as FORBIDDEN solutions (constraints banning re-finding them)
+so the search is forced into NEW territory. This is a COLLECTION-TIME model change (distinct from
+the time cap, which only controls when a solve gives up). Note: a longer cap does NOT fix
+saturation — the solve still keeps landing on the same easy basins, just with more time.
+
+User's "skip already-used seeds" lever shows up in BOTH halves of the system, applied to
+different problems:
+- **Collection:** exclude already-FOUND seeds (forbid constraints) → keeps finding NEW seeds when
+  saturation hits. (Deferred — only needed once duplicate rate climbs.)
+- **Usage:** skip already-USED seeds when replaying for real runs = the coverage-first round-robin
+  already implemented (`PHASE0_SEED_SELECT=roundrobin`).
+
+### Cap-confirmation note (documented, deferred)
+The powered cap is derived RETROACTIVELY from 180s-cap data (we know each run's actual
+time-to-feasible, so we can exactly model any SHORTER cap — a cap is just a stop time and doesn't
+change early-finishing runs). So a fresh run at the chosen cap is NOT statistically required.
+We MAY still do a short (~10-run) confirmation at the chosen cap as cheap hygiene that reality
+matches the model — optional, not required. A fresh run IS required if we change anything that
+alters search behavior (worker count, portfolio config) — those shift the distribution.
+
+### Caveat: cap optimizes THROUGHPUT, not seed QUALITY
+The cap analysis minimizes seconds-per-feasible-SEED (collection throughput). It does NOT know
+whether a lower cap discards slow-to-find seeds that would have led to BETTER final schedules.
+Whether seed identity predicts final quality is the open question the quality A/B answers. Keep
+the cap and quality questions independent — don't let an aggressive throughput cap silently trade
+away schedule quality.

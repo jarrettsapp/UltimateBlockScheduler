@@ -1468,6 +1468,16 @@ public class CpSatSchedulerEngine {
                     pool.size(), cachePoolMax()));
                 return;
             }
+            // Saturation monitor: distance from this NEW seed to its closest existing pool member,
+            // computed BEFORE adding it (so `pool` here excludes `found`). Exact-dedup re-discovery
+            // (delta=0) is a near-useless saturation signal at ~900 placements; a shrinking
+            // nearest-neighbor distance over insertion order is the real "packing" signal. Reuses
+            // hammingPlacements. -1 = first seed (no neighbor). See SEED_POOL_STATS_IMPLEMENTATION_PLAN.md.
+            int nnDist = -1;
+            for (Map<String, Long> existing : pool) {
+                int d = hammingPlacements(found, existing);
+                nnDist = (nnDist < 0) ? d : Math.min(nnDist, d);
+            }
             pool.add(found);
             StringBuilder blob = new StringBuilder();
             for (int i = 0; i < pool.size(); i++) {
@@ -1476,8 +1486,9 @@ public class CpSatSchedulerEngine {
             }
             configDAO.saveRawValue(CACHE_KEY_PREFIX + year, blob.toString());
             // Register the new seed for per-seed tracking (coverage-first selection + reward
-            // accumulation). Keyed by content hash so it's stable + dedup-consistent.
-            try { seedStatsDAO.ensureSeed(seedId(found), year); }
+            // accumulation) with its nearest-neighbor distance. Keyed by content hash so it's
+            // stable + dedup-consistent.
+            try { seedStatsDAO.ensureSeed(seedId(found), year, nnDist); }
             catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "seed-stats register failed", e); }
             solverLog.append(String.format(
                 "Phase 0 FIX=cache: cached new feasible assignment (pool now %d/%d).\n",

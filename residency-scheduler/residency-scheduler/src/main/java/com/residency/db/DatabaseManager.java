@@ -280,15 +280,35 @@ public class DatabaseManager {
                 created_at     TEXT NOT NULL,
                 times_started  INTEGER NOT NULL DEFAULT 0,
                 last_used_at   TEXT,
+                -- best_tier1/2/3 = lowest value EVER seen for each tier INDEPENDENTLY (telemetry).
+                -- They may come from DIFFERENT runs, so the triple is NOT one schedule — for ranking
+                -- a seed's best actual result, use best_run_tier1/2/3 (one coherent run) below.
                 best_tier1     INTEGER,
                 best_tier2     INTEGER,
                 best_tier3     INTEGER,
+                -- best_run_tier1/2/3 = the single LEXICOGRAPHICALLY-best run (compare T1, then T2,
+                -- then T3) from this seed; these three always move together (= one real schedule).
+                best_run_tier1 INTEGER,
+                best_run_tier2 INTEGER,
+                best_run_tier3 INTEGER,
                 sum_tier1      INTEGER NOT NULL DEFAULT 0,
                 sum_tier2      INTEGER NOT NULL DEFAULT 0,
                 sum_tier3      INTEGER NOT NULL DEFAULT 0,
-                runs_scored    INTEGER NOT NULL DEFAULT 0
+                runs_scored    INTEGER NOT NULL DEFAULT 0,
+                -- Saturation monitor: Hamming distance (placements differing) from this seed to its
+                -- nearest existing pool member AT INSERTION. -1 = first seed (no neighbor); NULL =
+                -- banked before this column existed (cannot reconstruct). Shrinking trend over
+                -- insertion order = diversity saturation. See SEED_POOL_STATS_IMPLEMENTATION_PLAN.md.
+                nn_dist_at_insert INTEGER
             )""",
-            "CREATE INDEX IF NOT EXISTS idx_seed_stats_lru ON phase0_seed_stats(year, times_started, last_used_at)"
+            "CREATE INDEX IF NOT EXISTS idx_seed_stats_lru ON phase0_seed_stats(year, times_started, last_used_at)",
+            // Additive columns for DBs created before these existed. CREATE TABLE IF NOT EXISTS won't
+            // add them to an existing table, so ALTER here; a failure (column already present) is
+            // swallowed by the runner below, making this idempotent.
+            "ALTER TABLE phase0_seed_stats ADD COLUMN nn_dist_at_insert INTEGER",
+            "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier1 INTEGER",
+            "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier2 INTEGER",
+            "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier3 INTEGER"
         };
         try (Statement stmt = connection.createStatement()) {
             for (String sql : migrations) {
