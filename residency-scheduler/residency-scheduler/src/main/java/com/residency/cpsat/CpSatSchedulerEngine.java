@@ -21,10 +21,14 @@ import java.util.stream.Collectors;
 /**
  * Four-phase CP-SAT scheduling engine (Phases 0–3).
  *
- * Phase 0 — Feasibility:
- *   Build all Tier-0 hard constraints, NO objective, solve.
+ * Phase 0 — Seeded feasibility:
+ *   Build all Tier-0 hard constraints.
+ *   Apply a greedy round-robin seed as warm-start hints (Option B).
+ *   Maximize total slot occupancy as a lightweight objective (Option A) so
+ *   the solver has a gradient rather than doing pure SAT search.
+ *   Use Phase-0-specific solver parameters tuned for fast feasibility (Option C).
  *   If INFEASIBLE: stop and report.
- *   If FEASIBLE: extract variable values as warm-start hints.
+ *   If FEASIBLE: extract variable values as warm-start hints for Phase 1.
  *
  * Phase 1 — Clinical quality (Tier 1):
  *   Rebuild Tier-0 constraints, apply Phase-0 hints, minimize Tier-1
@@ -180,7 +184,7 @@ public class CpSatSchedulerEngine {
      * applied AND the labels shown in the diagnostics. Previously the real model
      * builder, the stepwise diagnosis, and the removal diagnosis each hard-coded
      * their own order and label array, which drifted out of sync and could blame
-     * the wrong constraint for an infeasibility (see REVIEW.md finding M1).
+     * the wrong constraint for an infeasibility (see PROJECT.md Code review, M1).
      *
      * Note: block expansion and cross-rotation no-overlap are applied before any
      * of these steps in every path, so they are not part of this toggleable list.
@@ -232,6 +236,14 @@ public class CpSatSchedulerEngine {
             return status == CpSolverStatus.FEASIBLE || status == CpSolverStatus.OPTIMAL;
         }
     }
+
+    /**
+     * Result of the Phase-0 decomposition: the final window's full-model solve. The caller
+     * feeds {@code mc}/{@code solver}/{@code status} into the same downstream handling as the
+     * monolithic Phase-0 path (INFEASIBLE diagnosis, extractHints, Phase-1 handoff). A null
+     * DecompResult signals an unrecoverable corner → caller falls back to monolithic.
+     */
+    private record DecompResult(ModelContext mc, CpSolver solver, CpSolverStatus status) {}
 
     // ══════════════════════════════════════════════════════════════════════
     //  Coverage-floor prover
@@ -570,17 +582,104 @@ public class CpSatSchedulerEngine {
         // ── 4. Four-phase solve ────────────────────────────────────────────
 
         // ─── Phase 0: Pure feasibility ────────────────────────────────────
-        onProgress.accept(String.format(
-            "Phase 0 ▶ Finding feasible assignment (limit: %ds)…", tier0LimitSec));
-        ModelContext mc0 = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
-            eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+        // KNOWN-GOOD baseline: plain feasibility search, no objective/seed/tuning.
+        // The "accelerated" path (Options A+B+C below, gated by PHASE0_ACCEL) was a
+        // REGRESSION when added together — measured ~480s+ vs the 90–600s baseline —
+        // because Option A's maximize-occupancy ran to OPTIMAL and Option C's
+        // POLARITY_FALSE fought both the objective and the greedy seed. Reverted to
+        // baseline; the accel path is kept OFF for one-option-at-a-time isolation.
+        //   A) Lightweight objective: maximize total occupancy (gradient signal).
+        //   B) Greedy seed hints: round-robin warm start, repaired via repairHint.
+        //   C) Phase-0 solver tuning: probing off + POLARITY_FALSE + stop-after-first.
+        // PHASE0_MODE env var selects which acceleration option(s) are active, so each
+        // can be measured in isolation WITHOUT recompiling between variants:
+        //   baseline (default) — known-good: plain configureSolver, no objective/seed.
+        //   B    — Option B only: greedy seed hints on the normal solver.
+        //   C    — Option C only: stop-after-first-solution (+ probing off, polarity false).
+        //   A    — Option A only: maximize-occupancy objective on the normal solver.
+        //   accel — all three together (the committed regression).
+        // Mode string may name any subset of options, e.g. "A", "BC", "AC", "accel" (=ABC),
+        // or "baseline" (none). Membership is by letter so combos compose freely.
+        String p0mode = System.getenv().getOrDefault("PHASE0_MODE", "baseline").trim();
+        String p0letters = p0mode.equals("accel") ? "ABC" : p0mode;
+        boolean useA = p0letters.contains("A");
+        boolean useB = p0letters.contains("B");
+        boolean useC = p0letters.contains("C");
 
-        CpSolver solver0 = configureSolver(config, tier0LimitSec);
-        activeSolver = solver0;
-        CpSolverStatus status0 = solver0.solve(mc0.model());
-        activeSolver = null;
-        solverLog.append(String.format("\nPhase 0 result: %s  (%.1fs)\n",
-            status0, (System.currentTimeMillis() - startMs) / 1000.0));
+        // mc0/solver0/status0 are populated by EITHER the decomposition path (when
+        // PHASE0_DECOMP is set and succeeds) or the monolithic path below. All downstream
+        // handling (INFEASIBLE diagnosis, extractHints, Phase-1 handoff) is shared.
+        ModelContext mc0;
+        CpSolver solver0;
+        CpSolverStatus status0;
+
+        // ── Phase-0 DECOMPOSITION (staged warm-start; PHASE0_DECOMP=roll3|roll1) ──────
+        // Solves the year in time-sliced windows (block 13 anchored first), carrying each
+        // window's full assignment forward as HINTS into the next window's full-model solve.
+        // Every window solves the FULL model (all yearly per-resident constraints present),
+        // so the win is warm-starting, not problem shrinkage. On any window that returns
+        // INFEASIBLE/UNKNOWN, returns null → we fall through to the monolithic path below
+        // (never regress). Default/unset → skip entirely. See PHASE0_DECOMPOSITION_PLAN.md.
+        String p0decomp = System.getenv().getOrDefault("PHASE0_DECOMP", "").trim();
+        DecompResult dr = p0decomp.isEmpty() ? null
+            : solvePhase0Decomp(p0decomp, residents, rotations, config, reqMap, prereqMap,
+                eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage,
+                tier0LimitSec, onProgress, solverLog, startMs);
+
+        if (dr != null) {
+            // Decomposition produced a final full-model solve; feed it into the shared path.
+            mc0     = dr.mc();
+            solver0 = dr.solver();
+            status0 = dr.status();
+        } else {
+            if (!p0decomp.isEmpty()) {
+                onProgress.accept("Phase-0 decomposition hit an unrecoverable corner — falling back to monolithic solve…");
+                solverLog.append(String.format("\nPhase 0 decomp=%s fell back to monolithic.\n", p0decomp));
+            }
+            onProgress.accept(String.format(
+                "Phase 0 ▶ Finding feasible assignment (mode=%s, limit: %ds)…", p0mode, tier0LimitSec));
+            mc0 = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
+                eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+
+            if (useB) {
+                // Option B: apply greedy seed as warm-start hints before solving.
+                Map<String, Long> greedySeed = buildGreedySeedHints(
+                    residents, rotations, mc0.varFactory(), rotationLengths, eligibleByRotation, totalBlocks);
+                if (!greedySeed.isEmpty())
+                    applyHints(mc0.model(), mc0.varFactory(), residents, rotations, totalBlocks, greedySeed);
+            }
+            if (useA) {
+                // Option A: lightweight objective — maximize total slot occupancy.
+                List<BoolVar> allOccVars = new ArrayList<>();
+                for (Resident r : residents)
+                    for (Rotation s : rotations)
+                        allOccVars.addAll(mc0.varFactory().getOccupancyVars(r.getId(), s.getId()).values());
+                if (!allOccVars.isEmpty()) {
+                    IntVar totalOcc = mc0.model().newIntVar(0, allOccVars.size(), "p0_total_occ");
+                    mc0.model().addEquality(totalOcc,
+                        LinearExpr.sum(allOccVars.toArray(new BoolVar[0])));
+                    mc0.model().maximize(totalOcc);
+                }
+            }
+
+            solver0 = useC
+                ? configureSolverPhase0(config, tier0LimitSec)
+                : configureSolver(config, tier0LimitSec);
+            // PHASE0_DIAG=1 turns on CP-SAT's search-progress log so we can see the per-step
+            // presolve timing (probing / BVE / iterations) and find what eats the budget on
+            // capped draws. Applies on top of whatever mode is selected; output goes to stdout
+            // (the run log). Diagnostic only — leave off for normal runs.
+            if ("1".equals(System.getenv("PHASE0_DIAG"))) {
+                solver0.getParameters().setLogSearchProgress(true);
+                solver0.getParameters().setLogToStdout(true);
+            }
+            activeSolver = solver0;
+            status0 = solver0.solve(mc0.model());
+            activeSolver = null;
+        }
+        solverLog.append(String.format("\nPhase 0 result: %s  (%.1fs)%s\n",
+            status0, (System.currentTimeMillis() - startMs) / 1000.0,
+            dr != null ? " [decomp=" + p0decomp + "]" : ""));
 
         if (status0 == CpSolverStatus.INFEASIBLE) {
             onProgress.accept("Phase 0 INFEASIBLE — running stepwise diagnosis to locate the conflict…");
@@ -817,6 +916,203 @@ public class CpSatSchedulerEngine {
     //  Base model builder — Tier-0 hard constraints (called once per phase)
     // ══════════════════════════════════════════════════════════════════════
 
+    // ══════════════════════════════════════════════════════════════════════
+    //  Phase-0 decomposition (staged warm-start over time-sliced windows)
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Window slot-ranges for each decomposition mode, in SOLVE ORDER. Block 13 (slots 24-25)
+     * is anchored FIRST in every mode: it carries the only solver-side per-block special (a
+     * hard 2-categorical Y7D floor) and a Y7D-cannot-follow-GI/ID seam, so placing it while
+     * the schedule is wide open and carrying it forward as a hint lets the seam self-repair.
+     * Each int[] is {startSlotInclusive, endSlotExclusive}. See PHASE0_DECOMPOSITION_PLAN.md.
+     */
+    private static List<int[]> decompWindows(String mode, int totalBlocks) {
+        List<int[]> w = new ArrayList<>();
+        switch (mode) {
+            case "roll3", "hardroll3" -> {
+                w.add(new int[]{24, 26});                       // b13 anchored first
+                w.add(new int[]{0, 6});                         // b1-3
+                w.add(new int[]{6, 12});                        // b4-6
+                w.add(new int[]{12, 18});                       // b7-9
+                w.add(new int[]{18, 24});                       // b10-12
+            }
+            case "roll1", "hardroll1" -> {
+                w.add(new int[]{24, 26});                       // b13 anchored first
+                for (int s = 0; s < 24; s += 2) w.add(new int[]{s, s + 2}); // b1..b12
+            }
+            default -> { return null; }                        // unknown mode → no decomp
+        }
+        // Defensive clamp: if the grid isn't the canonical 26 slots, drop out-of-range windows.
+        w.removeIf(rng -> rng[0] >= totalBlocks);
+        for (int[] rng : w) rng[1] = Math.min(rng[1], totalBlocks);
+        return w;
+    }
+
+    /**
+     * Solves Phase 0 by staged solving over the windows from {@link #decompWindows}. Two
+     * families, selected by mode prefix:
+     *
+     * <ul>
+     * <li><b>roll3 / roll1 (hint-only):</b> every window solves the FULL model; prior windows
+     *     are carried forward as name-keyed {@code addHint} (NOT hard fixes), so the win is
+     *     warm-starting, not shrinkage. SMOKE-FAILED: window 1 is a cold full solve. Kept for
+     *     reference.</li>
+     * <li><b>hardroll3 / hardroll1 (Approach #1 — TRUE sub-problems):</b> after a window is
+     *     solved, its slots join a growing FROZEN set that is hard-{@code addEquality}-fixed to
+     *     carried values in every later window's model. Presolve eliminates the fixed vars, so
+     *     each step genuinely SHRINKS (only the current + still-unprocessed windows are free)
+     *     and {@code stopAfterFirstSolution} just needs one feasible completion of the free
+     *     tail — fast because the tail is wide open. On a window returning INFEASIBLE/UNKNOWN we
+     *     BACKTRACK: unfreeze the previous window and re-solve the pair together (depth-capped);
+     *     if backtrack is exhausted, return {@code null} → monolithic fallback (never regress).
+     *     This is the packed-year corner mitigation the plan calls for.</li>
+     * </ul>
+     *
+     * @return the final window's solve as a {@link DecompResult}, or {@code null} on an
+     *         unrecoverable corner so the caller can fall back to the monolithic Phase-0 solve
+     *         and never regress.
+     */
+    private DecompResult solvePhase0Decomp(
+            String mode, List<Resident> residents, List<Rotation> rotations, ScheduleConfig config,
+            Map<Integer, Map<Integer, RotationRequirement>> reqMap,
+            Map<Integer, List<Prerequisite>> prereqMap,
+            Map<Integer, Set<Integer>> eligibleByRotation,
+            Map<Integer, int[]> rotationLengths,
+            Map<Integer, List<RotationSequenceRule>> seqMap,
+            int totalBlocks,
+            Map<Integer, Map<Integer, Integer>> auxCoverage,
+            int tier0LimitSec,
+            java.util.function.Consumer<String> onProgress,
+            StringBuilder solverLog, long startMs) {
+
+        List<int[]> windows = decompWindows(mode, totalBlocks);
+        if (windows == null || windows.isEmpty()) {
+            solverLog.append(String.format("\nPhase 0 decomp: unknown mode '%s' — skipping.\n", mode));
+            return null;
+        }
+
+        final boolean hardFix = mode.startsWith("hard");
+
+        // Per-window budget. For hint modes, split the cap evenly (each window solves the full
+        // model). For hard-fix modes the LAST steps are the cheapest (most slots frozen) and
+        // the EARLY steps the most expensive (largest free tail), but we keep an even split
+        // with a 30s floor for simplicity — measure before tuning. 0/negative → unlimited.
+        int perWindowSec = tier0LimitSec > 0
+            ? Math.max(30, tier0LimitSec / windows.size())
+            : 0;
+        // Backtrack depth cap (hard-fix only): how many already-frozen windows we may unfreeze
+        // to escape a corner before giving up to the monolithic fallback.
+        final int MAX_BACKTRACK = 3;
+
+        // carried = full assignment of every successfully-solved window so far (var name → 0/1).
+        Map<String, Long> carried = new HashMap<>();
+        // Snapshot of `carried` taken BEFORE each window was solved, so a backtrack can restore
+        // the state to "as if window k had not run" and re-solve it with a larger free region.
+        List<Map<String, Long>> carriedBefore = new ArrayList<>();
+        // Slots that are currently hard-frozen (union of solved windows, minus any unfrozen
+        // by an in-flight backtrack). Only meaningful when hardFix.
+        Set<Integer> frozenSlots = new HashSet<>();
+
+        ModelContext mc = null;
+        CpSolver solver = null;
+        CpSolverStatus status = CpSolverStatus.UNKNOWN;
+        int backtracksUsed = 0;
+
+        int wi = 0;
+        while (wi < windows.size()) {
+            if (stopRequested.get()) {
+                solverLog.append("\nPhase 0 decomp: stop requested — aborting decomposition.\n");
+                return null;
+            }
+            int[] rng = windows.get(wi);
+            onProgress.accept(String.format(
+                "Phase 0 ▶ decomp=%s window %d/%d (slots %d–%d, %s, limit %ds)…",
+                mode, wi + 1, windows.size(), rng[0], rng[1] - 1,
+                hardFix ? "hard-fix" : "hint", perWindowSec > 0 ? perWindowSec : tier0LimitSec));
+
+            mc = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
+                eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+
+            // Remember the pre-solve state of this window so backtrack can rewind to it.
+            if (carriedBefore.size() <= wi) carriedBefore.add(new HashMap<>(carried));
+            else carriedBefore.set(wi, new HashMap<>(carried));
+
+            int fixedCount = 0;
+            if (hardFix) {
+                // TRUE sub-problem: hard-fix every frozen slot to its carried value (presolve
+                // eliminates them) and leave the current + still-unprocessed windows free.
+                fixedCount = fixFrozenSlots(mc.model(), mc.varFactory(), residents, rotations,
+                    totalBlocks, rotationLengths, carried, frozenSlots);
+                // Still warm-start the free tail from any carried values it has (cheap, helps
+                // the seam). addHint never constrains, so this can't fight the hard fixes.
+                if (!carried.isEmpty())
+                    applyHints(mc.model(), mc.varFactory(), residents, rotations, totalBlocks, carried);
+            } else if (!carried.isEmpty()) {
+                // Hint-only mode: warm-start the full model from everything decided so far.
+                applyHints(mc.model(), mc.varFactory(), residents, rotations, totalBlocks, carried);
+            }
+
+            // Stop at the first feasible solution: we only need a feasible incumbent to carry
+            // forward, not optimality (matches the Phase-0 handoff contract).
+            solver = configureSolver(config, perWindowSec);
+            solver.getParameters().setStopAfterFirstSolution(true);
+
+            activeSolver = solver;
+            status = solver.solve(mc.model());
+            activeSolver = null;
+
+            solverLog.append(String.format(
+                "  decomp=%s window %d/%d → %s  (frozen=%d slots, %d vars fixed, %.1fs total)\n",
+                mode, wi + 1, windows.size(), status, frozenSlots.size(), fixedCount,
+                (System.currentTimeMillis() - startMs) / 1000.0));
+
+            boolean solved = status == CpSolverStatus.FEASIBLE || status == CpSolverStatus.OPTIMAL;
+
+            if (solved) {
+                carried = extractHints(solver, mc.varFactory(), residents, rotations, totalBlocks);
+                if (hardFix) for (int b = rng[0]; b < rng[1]; b++) frozenSlots.add(b);
+                wi++;
+                continue;
+            }
+
+            // ── Not solved (INFEASIBLE or UNKNOWN/capped) ────────────────────────────────
+            if (!hardFix) {
+                // Hint mode keeps its original honest behavior: an INFEASIBLE window means the
+                // FULL model is infeasible (hints add no constraints) → report via normal path;
+                // a capped window is an unrecoverable corner → monolithic fallback.
+                if (status == CpSolverStatus.INFEASIBLE)
+                    return new DecompResult(mc, solver, status);
+                solverLog.append(String.format(
+                    "  decomp=%s window %d capped (%s) — falling back to monolithic.\n",
+                    mode, wi + 1, status));
+                return null;
+            }
+
+            // Hard-fix mode: a corner here may be caused by the FROZEN prefix wedging the free
+            // tail (packed-year risk). BACKTRACK — unfreeze the previous window and re-solve it
+            // together with this one (its slots become free again). Cap the total backtracks.
+            if (wi == 0 || backtracksUsed >= MAX_BACKTRACK) {
+                solverLog.append(String.format(
+                    "  decomp=%s window %d unrecoverable (%s) after %d backtracks — monolithic fallback.\n",
+                    mode, wi + 1, status, backtracksUsed));
+                return null;
+            }
+            backtracksUsed++;
+            int prev = wi - 1;
+            int[] prevRng = windows.get(prev);
+            for (int b = prevRng[0]; b < prevRng[1]; b++) frozenSlots.remove(b);
+            carried = new HashMap<>(carriedBefore.get(prev));  // rewind to before prev was solved
+            solverLog.append(String.format(
+                "  decomp=%s window %d corner (%s) → backtrack #%d: unfreeze window %d (slots %d–%d), re-solve.\n",
+                mode, wi + 1, status, backtracksUsed, prev + 1, prevRng[0], prevRng[1] - 1));
+            wi = prev;  // re-solve the previous window with the larger free region, then this one
+        }
+
+        // Final window's solve IS the Phase-0 feasible assignment handed to Phase 1.
+        return new DecompResult(mc, solver, status);
+    }
+
     private ModelContext buildBaseModel(
             List<Resident> residents, List<Rotation> rotations,
             ScheduleConfig config,
@@ -842,7 +1138,7 @@ public class CpSatSchedulerEngine {
         ConstraintBuilder cb = new ConstraintBuilder(model, varFactory, config, totalBlocks, auxCoverage);
         // Apply every toggleable hard constraint, in the canonical order. The same
         // ordered list drives the stepwise and removal diagnostics, so they can
-        // never disagree about which constraint is which (REVIEW.md M1).
+        // never disagree about which constraint is which (PROJECT.md Code review, M1).
         for (ConstraintStep step : orderedConstraintSteps(residents, rotations, reqMap, prereqMap, seqMap, rotById)) {
             step.apply().accept(cb);
         }
@@ -905,9 +1201,165 @@ public class CpSatSchedulerEngine {
         }
     }
 
+    /**
+     * HARD-FIX a subset of slots (Approach #1 — true sub-problems). For every occupancy var
+     * whose block falls in {@code frozenSlots}, {@code addEquality(var, carriedValue)}; this
+     * genuinely SHRINKS the search (CP-SAT presolve eliminates fixed vars) rather than merely
+     * warm-starting it the way {@link #applyHints} does. Start vars whose ENTIRE rotation
+     * placement is determined by frozen blocks are fixed too (a start at block t with the
+     * whole [t, t+len) inside the frozen set). Blocks outside {@code frozenSlots} stay free.
+     *
+     * <p>Only vars present in {@code carried} are fixed; a slot with no carried value is left
+     * free (so a partially-seeded freeze never over-constrains). Returns the number of
+     * occupancy vars fixed (for diagnostics).
+     */
+    private int fixFrozenSlots(CpModel model, VariableFactory varFactory,
+            List<Resident> residents, List<Rotation> rotations, int totalBlocks,
+            Map<Integer, int[]> rotationLengths,
+            Map<String, Long> carried, Set<Integer> frozenSlots) {
+        if (carried.isEmpty() || frozenSlots.isEmpty()) return 0;
+        int fixed = 0;
+        for (Resident r : residents) {
+            for (Rotation s : rotations) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    if (!frozenSlots.contains(b)) continue;
+                    BoolVar occ = varFactory.getOccupancyVar(r.getId(), s.getId(), b);
+                    if (occ == null) continue;
+                    Long v = carried.get(occ.getName());
+                    if (v != null) { model.addEquality(occ, v); fixed++; }
+                }
+                // Fix start vars only when the whole placement lies inside the frozen region,
+                // so a rotation that straddles the seam (start frozen, tail free) is not
+                // over-fixed. A start var at block t with carried value 0 can always be fixed
+                // (it asserts "no start here"); value 1 only when [t, t+len) ⊆ frozenSlots.
+                for (var e : varFactory.getStartVars(r.getId(), s.getId()).entrySet()) {
+                    int t = e.getKey();
+                    BoolVar sv = e.getValue();
+                    Long v = carried.get(sv.getName());
+                    if (v == null) continue;
+                    if (v == 0L) { model.addEquality(sv, 0L); continue; }
+                    int[] lengths = rotationLengths.getOrDefault(s.getId(), new int[]{2});
+                    boolean allFrozen = true;
+                    int maxLen = lengths == null || lengths.length == 0 ? 1 : lengths[lengths.length - 1];
+                    for (int b = t; b < t + maxLen && b < totalBlocks; b++)
+                        if (!frozenSlots.contains(b)) { allFrozen = false; break; }
+                    if (allFrozen) model.addEquality(sv, 1L);
+                }
+            }
+        }
+        return fixed;
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     //  Solver configuration
     // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Phase-0-specific solver configuration (Option C).
+     *
+     * Pure feasibility search benefits from different tuning than optimization phases:
+     * - Probing (pre-solve constraint propagation) is expensive and mostly helps when
+     *   the solver needs to prove optimality — not useful for "find any solution fast."
+     * - Setting initial polarity to false tells each worker to try the "unassigned"
+     *   branch first, which tends to reach the first feasible assignment sooner on
+     *   tightly-packed problems like this one.
+     * - Everything else (workers, repairHint, time limit) matches the standard config.
+     */
+    private CpSolver configureSolverPhase0(ScheduleConfig config, int timeLimitSec) {
+        CpSolver solver = new CpSolver();
+        solver.getParameters().setNumWorkers(config.getCpSatNumWorkers());
+        solver.getParameters().setLogToStdout(false);
+        solver.getParameters().setRepairHint(true);
+        // Disable pre-solve probing: expensive for optimization, not helpful for SAT.
+        solver.getParameters().setCpModelProbingLevel(0);
+        // Prefer the "false" (unassigned) polarity first — finds feasible solutions
+        // faster on problems where most slots should be empty (sparse assignment).
+        solver.getParameters().setInitialPolarity(com.google.ortools.sat.SatParameters.Polarity.POLARITY_FALSE);
+        // Stop at the FIRST feasible solution. Phase 0 carries a lightweight occupancy
+        // objective (Option A) only to steer early search toward feasible territory — we
+        // do NOT want CP-SAT to prove that objective optimal, which turns "find any
+        // schedule" back into a full optimization (observed: ~480s to OPTIMAL). The first
+        // feasible incumbent is all Phase 1 needs as a warm start.
+        solver.getParameters().setStopAfterFirstSolution(true);
+        if (timeLimitSec > 0) solver.getParameters().setMaxTimeInSeconds(timeLimitSec);
+        return solver;
+    }
+
+    /**
+     * Builds a greedy round-robin seed assignment as warm-start hints for Phase 0 (Option B).
+     *
+     * Strategy: for each rotation, distribute its minimum required blocks across eligible
+     * residents in round-robin order, placing each assignment at the earliest valid start
+     * block that doesn't overlap prior assignments for that resident. This satisfies the
+     * workload-minimum intent for most rotations without trying to honor every constraint
+     * (which would require running the full solver anyway).
+     *
+     * CP-SAT's repairHint=true will take this seed and repair any constraint violations
+     * before searching further, so a partially-wrong seed is still useful — it gives the
+     * solver a warm region of the search space to start from rather than a blank slate.
+     * A seed that is too wrong is simply ignored and the solver falls back to cold search.
+     *
+     * Returns a map of variable name → value (0 or 1) ready for applyHints().
+     */
+    private Map<String, Long> buildGreedySeedHints(
+            List<Resident> residents,
+            List<Rotation> rotations,
+            VariableFactory varFactory,
+            Map<Integer, int[]> rotationLengths,
+            Map<Integer, Set<Integer>> eligibleByRotation,
+            int totalBlocks) {
+
+        Map<String, Long> hints = new HashMap<>();
+        // Track the next free block for each resident (greedy left-to-right packing).
+        Map<Integer, Integer> nextFreeBlock = new HashMap<>();
+        for (Resident r : residents) nextFreeBlock.put(r.getId(), 0);
+
+        for (Rotation rot : rotations) {
+            Set<Integer> eligible = eligibleByRotation.getOrDefault(rot.getId(), Set.of());
+            if (eligible.isEmpty()) continue;
+
+            int[] lengths = rotationLengths.getOrDefault(rot.getId(), new int[]{2});
+            int preferredLen = lengths[0]; // use the shortest allowed length for the seed
+
+            // Minimum blocks this rotation needs filled (in solver slots).
+            // minBlocksRequired is stored in weeks; convert to slots (1 slot = 2 weeks).
+            int minSlots = Math.max(1, rot.getMinBlocksRequired() / 2);
+
+            List<Resident> eligibleResidents = residents.stream()
+                .filter(r -> eligible.contains(r.getId()))
+                .collect(Collectors.toList());
+            if (eligibleResidents.isEmpty()) continue;
+
+            int placed = 0;
+            int resIdx = 0;
+            // Attempt to place minSlots worth of assignments for this rotation.
+            while (placed < minSlots && resIdx < eligibleResidents.size() * totalBlocks) {
+                Resident r = eligibleResidents.get(resIdx % eligibleResidents.size());
+                resIdx++;
+
+                int startBlock = nextFreeBlock.getOrDefault(r.getId(), 0);
+                // Find the earliest valid start block for this (resident, rotation, length).
+                boolean found = false;
+                for (int t = startBlock; t + preferredLen <= totalBlocks; t++) {
+                    BoolVar sv = varFactory.getStartVar(r.getId(), rot.getId(), t);
+                    if (sv == null) continue; // variable wasn't created (ineligible at this block)
+                    // Hint start var = 1, all other starts for this resident+rotation = 0.
+                    hints.put(sv.getName(), 1L);
+                    // Hint occupancy vars = 1 for the covered range.
+                    for (int b = t; b < t + preferredLen && b < totalBlocks; b++) {
+                        BoolVar occ = varFactory.getOccupancyVar(r.getId(), rot.getId(), b);
+                        if (occ != null) hints.put(occ.getName(), 1L);
+                    }
+                    nextFreeBlock.put(r.getId(), t + preferredLen);
+                    placed++;
+                    found = true;
+                    break;
+                }
+                if (!found) break; // no room left for this resident; move on
+            }
+        }
+        return hints;
+    }
 
     private CpSolver configureSolver(ScheduleConfig config, int timeLimitSec) {
         CpSolver solver = new CpSolver();
@@ -1191,7 +1643,7 @@ public class CpSatSchedulerEngine {
                 if (pool != null && !pool.contains(r.getId())) continue;
                 // All quantities here are in SLOTS (2-week units) so they compare directly
                 // against effMin/effMax, which are slot-based workload bounds. maxBlocksAllowed
-                // is entered in WEEKS, so convert. (Previously used raw weeks — see REVIEW.md H2.)
+                // is entered in WEEKS, so convert. (Previously used raw weeks — see PROJECT.md Code review, H2.)
                 int maxSlots = ScheduleUnits.weeksToSlots(s.getMaxBlocksAllowed());
                 maxSchedulable += maxSlots;
                 Map<Integer, RotationRequirement> byPgy = reqMap.getOrDefault(s.getId(), Map.of());
