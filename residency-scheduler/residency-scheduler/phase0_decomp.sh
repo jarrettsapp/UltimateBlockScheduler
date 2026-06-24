@@ -52,19 +52,24 @@ for mode in "${MODES[@]}"; do
     pstatus="$(echo "$pline" | sed -E 's/.*result: *([A-Z_]+).*/\1/')"
     psecs="$(echo "$pline" | sed -E 's/.*\(([0-9.]+)s\).*/\1/')"
     [ -z "$pline" ] && { pstatus="NA"; psecs="NA"; }
-    # Per-window diagnostics (decomp modes only): count window lines, backtracks, worst status.
-    nwin="$(grep -cE 'decomp='"$mode"' window [0-9]+/[0-9]+ →' "$log" 2>/dev/null || echo 0)"
-    nbt="$(grep -cE 'backtrack #' "$log" 2>/dev/null || echo 0)"
+    # Per-window diagnostics (decomp modes only). The window log line is:
+    #   "  decomp=MODE window N/M -> STATUS  (frozen=K slots, V vars fixed, T s total)"
+    # The arrow char may render oddly under the console codepage, so match on "frozen=" which
+    # is reliably ASCII. Pipe through `wc -l`/`tr -d` so a no-match yields a clean "0" (grep -c
+    # alone exits non-zero on no match and would double-count with `|| echo 0`).
+    nwin="$(grep -E 'decomp='"$mode"' window [0-9]+/[0-9]+ .*frozen=' "$log" 2>/dev/null | wc -l | tr -d ' \r\n')"
+    nbt="$(grep -E 'backtrack #' "$log" 2>/dev/null | wc -l | tr -d ' \r\n')"
+    [ -z "$nwin" ] && nwin=0; [ -z "$nbt" ] && nbt=0
     # worst window status: INFEASIBLE > UNKNOWN > FEASIBLE > OPTIMAL (corner severity)
     worst="-"
     if [ "$mode" != "mono" ]; then
-      if   grep -qE 'window [0-9]+/[0-9]+ → INFEASIBLE' "$log"; then worst="INFEASIBLE"
-      elif grep -qE 'window [0-9]+/[0-9]+ → UNKNOWN'    "$log"; then worst="UNKNOWN"
-      elif grep -qE 'window [0-9]+/[0-9]+ → FEASIBLE'   "$log"; then worst="FEASIBLE"
-      elif grep -qE 'window [0-9]+/[0-9]+ → OPTIMAL'    "$log"; then worst="OPTIMAL"
+      if   grep -qE 'window [0-9]+/[0-9]+ .*INFEASIBLE.*frozen=' "$log"; then worst="INFEASIBLE"
+      elif grep -qE 'window [0-9]+/[0-9]+ .*UNKNOWN.*frozen='    "$log"; then worst="UNKNOWN"
+      elif grep -qE 'window [0-9]+/[0-9]+ .*FEASIBLE.*frozen='   "$log"; then worst="FEASIBLE"
+      elif grep -qE 'window [0-9]+/[0-9]+ .*OPTIMAL.*frozen='    "$log"; then worst="OPTIMAL"
       fi
     fi
-    echo "$mode,$i,$pstatus,$psecs,$nwin,$nbt,$worst" | tee -a "$RESULTS"
+    printf '%s,%s,%s,%s,%s,%s,%s\n' "$mode" "$i" "$pstatus" "$psecs" "$nwin" "$nbt" "$worst" | tee -a "$RESULTS"
   done
 done
 
@@ -75,12 +80,14 @@ import sys, csv, statistics
 from collections import defaultdict
 rows=list(csv.DictReader(open(sys.argv[1])))
 bymode=defaultdict(list)
-for r in rows: bymode[r['mode']].append(r)
+# skip any malformed row (e.g. a column that came through as None/empty)
+for r in rows:
+    if r.get('mode') and r.get('phase0_status'): bymode[r['mode']].append(r)
 for mode, rs in bymode.items():
     n=len(rs)
     caps=sum(1 for r in rs if r['phase0_status'] in ('UNKNOWN','NA','INFEASIBLE'))
-    secs=[float(r['phase0_secs']) for r in rs if r['phase0_secs'] not in ('NA','')]
-    bt=[int(r['backtracks']) for r in rs if r['backtracks'].isdigit()]
+    secs=[float(r['phase0_secs']) for r in rs if (r.get('phase0_secs') or 'NA') not in ('NA','')]
+    bt=[int(r['backtracks']) for r in rs if (r.get('backtracks') or '').isdigit()]
     med=statistics.median(secs) if secs else float('nan')
     mn=min(secs) if secs else float('nan'); mx=max(secs) if secs else float('nan')
     btsum=sum(bt) if bt else 0

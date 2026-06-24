@@ -930,14 +930,14 @@ public class CpSatSchedulerEngine {
     private static List<int[]> decompWindows(String mode, int totalBlocks) {
         List<int[]> w = new ArrayList<>();
         switch (mode) {
-            case "roll3", "hardroll3" -> {
+            case "roll3", "hardroll3", "roll3seed" -> {
                 w.add(new int[]{24, 26});                       // b13 anchored first
                 w.add(new int[]{0, 6});                         // b1-3
                 w.add(new int[]{6, 12});                        // b4-6
                 w.add(new int[]{12, 18});                       // b7-9
                 w.add(new int[]{18, 24});                       // b10-12
             }
-            case "roll1", "hardroll1" -> {
+            case "roll1", "hardroll1", "roll1seed" -> {
                 w.add(new int[]{24, 26});                       // b13 anchored first
                 for (int s = 0; s < 24; s += 2) w.add(new int[]{s, s + 2}); // b1..b12
             }
@@ -993,14 +993,24 @@ public class CpSatSchedulerEngine {
         }
 
         final boolean hardFix = mode.startsWith("hard");
+        // "seed" variants (roll3seed/roll1seed): hint-based, but window 1 gets the FULL budget
+        // and is warm-started with buildGreedySeedHints — Approach #3's fix for the cold
+        // window-1 that smoke-killed plain roll3 (greedy-seeded full-model Phase 0 measured
+        // ~91s vs ~248s monolithic). Subsequent windows carry the prior solve forward as hints.
+        final boolean seedWindow1 = mode.endsWith("seed");
 
-        // Per-window budget. For hint modes, split the cap evenly (each window solves the full
-        // model). For hard-fix modes the LAST steps are the cheapest (most slots frozen) and
-        // the EARLY steps the most expensive (largest free tail), but we keep an even split
-        // with a 30s floor for simplicity — measure before tuning. 0/negative → unlimited.
-        int perWindowSec = tier0LimitSec > 0
-            ? Math.max(30, tier0LimitSec / windows.size())
-            : 0;
+        // Per-window budget.
+        //  • Plain hint modes (roll3/roll1): split the cap evenly (each window solves the FULL
+        //    model, so an even split keeps total wall time ~comparable to monolithic).
+        //  • Hard-fix modes and seed modes: give EVERY window the FULL cap. The early windows
+        //    have the largest free region (window 1 ≈ monolithic-with-stop-after-first) while
+        //    later windows are warm-started/shrunk and finish fast, so the TOTAL can still beat
+        //    monolithic WITHOUT starving the cold first window — the upside-down-staging failure
+        //    of the even split (window 1 capped at cap/N). Each window self-limits via
+        //    stopAfterFirstSolution, so the full cap is a ceiling, not a spend. 0/neg → unlimited.
+        int perWindowSec = tier0LimitSec <= 0 ? 0
+            : (hardFix || seedWindow1) ? tier0LimitSec
+            : Math.max(30, tier0LimitSec / windows.size());
         // Backtrack depth cap (hard-fix only): how many already-frozen windows we may unfreeze
         // to escape a corner before giving up to the monolithic fallback.
         final int MAX_BACKTRACK = 3;
@@ -1014,6 +1024,14 @@ public class CpSatSchedulerEngine {
         // by an in-flight backtrack). Only meaningful when hardFix.
         Set<Integer> frozenSlots = new HashSet<>();
 
+        // Global wall budget for the WHOLE decomposition so per-window full caps (+ backtracks)
+        // can't run away. Allow up to 2× the Phase-0 cap total: window 1 may spend a full cap
+        // (worst case ≈ monolithic), leaving headroom for the cheap shrunk tail + limited
+        // backtrack. Once exhausted, the next window's limit shrinks to the remainder and a
+        // capped window then triggers the fallback. (P1/P2/P3 are tiny in the isolation harness,
+        // so startMs ≈ Phase-0 start; for a full 4-phase run this just caps Phase-0 generously.)
+        final long globalBudgetMs = tier0LimitSec > 0 ? 2L * tier0LimitSec * 1000L : Long.MAX_VALUE;
+
         ModelContext mc = null;
         CpSolver solver = null;
         CpSolverStatus status = CpSolverStatus.UNKNOWN;
@@ -1026,10 +1044,23 @@ public class CpSatSchedulerEngine {
                 return null;
             }
             int[] rng = windows.get(wi);
+            // Clamp this window's limit to the global remaining budget.
+            int windowLimit = perWindowSec;
+            if (tier0LimitSec > 0) {
+                long remainingMs = globalBudgetMs - (System.currentTimeMillis() - startMs);
+                int remainingSec = (int) Math.max(0, remainingMs / 1000);
+                if (remainingSec <= 0) {
+                    solverLog.append(String.format(
+                        "  decomp=%s window %d: global Phase-0 budget exhausted — monolithic fallback.\n",
+                        mode, wi + 1));
+                    return null;
+                }
+                windowLimit = Math.min(perWindowSec, remainingSec);
+            }
             onProgress.accept(String.format(
                 "Phase 0 ▶ decomp=%s window %d/%d (slots %d–%d, %s, limit %ds)…",
                 mode, wi + 1, windows.size(), rng[0], rng[1] - 1,
-                hardFix ? "hard-fix" : "hint", perWindowSec > 0 ? perWindowSec : tier0LimitSec));
+                hardFix ? "hard-fix" : "hint", windowLimit > 0 ? windowLimit : tier0LimitSec));
 
             mc = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
                 eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
@@ -1051,11 +1082,19 @@ public class CpSatSchedulerEngine {
             } else if (!carried.isEmpty()) {
                 // Hint-only mode: warm-start the full model from everything decided so far.
                 applyHints(mc.model(), mc.varFactory(), residents, rotations, totalBlocks, carried);
+            } else if (seedWindow1 && wi == 0) {
+                // Seed variants: window 1 has nothing carried yet (cold). Warm-start it with the
+                // greedy round-robin seed so the first full-model solve isn't a blank-slate
+                // search — the fix for the cold window-1 that smoke-killed plain roll3.
+                Map<String, Long> greedySeed = buildGreedySeedHints(
+                    residents, rotations, mc.varFactory(), rotationLengths, eligibleByRotation, totalBlocks);
+                if (!greedySeed.isEmpty())
+                    applyHints(mc.model(), mc.varFactory(), residents, rotations, totalBlocks, greedySeed);
             }
 
             // Stop at the first feasible solution: we only need a feasible incumbent to carry
             // forward, not optimality (matches the Phase-0 handoff contract).
-            solver = configureSolver(config, perWindowSec);
+            solver = configureSolver(config, windowLimit);
             solver.getParameters().setStopAfterFirstSolution(true);
 
             activeSolver = solver;
