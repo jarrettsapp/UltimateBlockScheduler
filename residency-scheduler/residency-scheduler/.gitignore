@@ -1,0 +1,47 @@
+# ── Build output ──────────────────────────────────────────────
+target/
+*.class
+
+# ── Databases (runtime data — never commit) ───────────────────
+*.db
+*.db-wal
+*.db-shm
+*.db.*
+*.sqlite
+residency_scheduler*.db*
+
+# ── Solver run artifacts / logs / CSVs (generated, not source) ─
+*.out
+*.out.log*
+*.log
+*_results.csv
+*_logs/
+phase0_*_logs/
+phase0_seed_logs/
+phase0_decomp_logs/
+phase0_matrix_logs/
+phase0_iso_logs/
+phase0_timing_logs/
+sweep_runs/
+sweep_grids/
+sweep_results.csv
+sweep_state.json
+shakedown_results_*/
+schedules/
+traj_*.csv
+compile_out.txt
+.seed_pool.lock
+
+# ── Python caches ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+
+# ── Generated reports / one-off PDFs ──────────────────────────
+schedule_run*.pdf
+
+# ── Classpath dump (machine-specific absolute paths) ──────────
+cp.txt
+
+# ── OS / editor cruft ─────────────────────────────────────────
+.DS_Store
+Thumbs.db

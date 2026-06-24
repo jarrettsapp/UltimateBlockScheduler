@@ -8,7 +8,7 @@ import java.util.Set;
  * Single source of truth for the program's authoritative workload tiers, keyed by rotation
  * <em>name</em>. These deliberately do NOT use {@link RotationType}, which is unreliable here
  * (it types Inpatient GI / Infectious Disease as OUTPATIENT and Younker 8 Pulmonology as
- * INPATIENT). See SCHEDULING_RULES.md §6.
+ * INPATIENT). See RULES.md §7.
  *
  * <p>Previously the same heavy / Sunday-source name sets were hard-coded independently in
  * {@code ConstraintBuilder.applyZeroVolunteerFloor}, {@code CpSatSchedulerEngine.proveCoverageFloor},

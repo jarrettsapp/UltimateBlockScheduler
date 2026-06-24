@@ -24,10 +24,11 @@ public class MainApp extends Application {
         Tab complianceTab  = new Tab("✅ Compliance",      new ComplianceView());
         Tab autoTab        = new Tab("🤖 Auto-Scheduler",  autoScheduleView);
         Tab constraintTab  = new Tab("🔍 Constraints",     new ConstraintViewerPanel());
+        Tab sweepTab       = new Tab("📈 Sweep Analysis",  new SweepAnalysisView());
         Tab settingsTab    = new Tab("⚙️ Settings",         new ScheduleConfigView());
 
         tabPane.getTabs().addAll(scheduleTab, residentsTab, rotationsTab, rulesTab,
-            complianceTab, autoTab, constraintTab, settingsTab);
+            complianceTab, autoTab, constraintTab, sweepTab, settingsTab);
 
         // Refresh the Auto-Scheduler year picker whenever the user switches to that tab,
         // so any year generated on the Schedule tab is immediately visible and selected.

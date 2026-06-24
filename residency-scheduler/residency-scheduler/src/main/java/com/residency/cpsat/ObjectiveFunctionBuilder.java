@@ -330,7 +330,7 @@ public class ObjectiveFunctionBuilder {
      * therefore pushes toward 2-inpatient / 1-outpatient per cycle. The caller
      * minimizes this (weighted by weightFourPlusTwo).
      *
-     * Known limitation (RULES_REVIEW): the cadence is anchored to the absolute
+     * Known limitation (RULES.md §13, B2): the cadence is anchored to the absolute
      * block index (b % 3), so every resident's preferred phase is aligned rather
      * than staggered. If staggering matters for call distribution, replace this
      * with a per-resident max-consecutive-inpatient rule ("option B"). Kept as-is

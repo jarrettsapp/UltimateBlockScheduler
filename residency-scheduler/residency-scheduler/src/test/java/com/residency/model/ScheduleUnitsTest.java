@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Pins the week <-> slot conversion that several call sites historically got
- * wrong (some divided weeks by 2, others by 4). See REVIEW.md findings H1/H2.
+ * wrong (some divided weeks by 2, others by 4). See PROJECT.md (Code review, H1/H2).
  *
  * The canonical rule: 1 slot = 2 weeks. A rotation's max/min are entered in
  * weeks; the solver works in slots; weeks -> slots is divide-by-2 (round up).
@@ -51,7 +51,7 @@ class ScheduleUnitsTest {
         assertNotEquals(maxWeeksEntered / 4, ScheduleUnits.weeksToSlots(maxWeeksEntered));
     }
 
-    // ── blocksToSlots: per-rotation requirement conversion (RULES_REVIEW B1) ──
+    // ── blocksToSlots: per-rotation requirement conversion (RULES.md §13, B1) ──
 
     @Test
     void blocksToSlots_convertsClinicalBlocksToSlots() {

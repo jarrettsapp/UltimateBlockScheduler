@@ -38,7 +38,7 @@ public class DatabaseManager {
      * Synchronized to close the double-initialization race that previously
      * existed: DAOs are constructed from both the JavaFX thread and the solver
      * background thread, so an unguarded check-then-create could build two
-     * managers (and two connections). See REVIEW.md finding H3.
+     * managers (and two connections). See PROJECT.md Code review, H3.
      */
     public static synchronized DatabaseManager getInstance() throws SQLException {
         if (instance == null) {
@@ -159,7 +159,7 @@ public class DatabaseManager {
                 rotation_id INTEGER NOT NULL REFERENCES rotations(id) ON DELETE CASCADE UNIQUE,
                 -- allowed_block_lengths is stored in WEEKS (comma-separated). The default
                 -- '4' = one 4-week full block. ScheduleConfigDAO converts weeks <-> the
-                -- solver's 2-week slots on load/save. See ScheduleUnits / REVIEW.md M2.
+                -- solver's 2-week slots on load/save. See ScheduleUnits / PROJECT.md Code review, M2.
                 allowed_block_lengths TEXT NOT NULL DEFAULT '4',
                 requires_consecutive INTEGER NOT NULL DEFAULT 0,
                 min_per_week INTEGER NOT NULL DEFAULT 1,
@@ -266,7 +266,29 @@ public class DatabaseManager {
                 rotation_id  INTEGER NOT NULL,
                 block_number INTEGER NOT NULL
             )""",
-            "CREATE INDEX IF NOT EXISTS idx_sva_version ON schedule_version_assignments(version_id)"
+            "CREATE INDEX IF NOT EXISTS idx_sva_version ON schedule_version_assignments(version_id)",
+            // Per-seed tracking for the Phase-0 feasible-assignment POOL (PHASE0_FIX=cache).
+            // seed_id = sha256(occupancy fingerprint) → stable, content-keyed, scales to
+            // thousands+ of seeds with no collision/reuse. Usage columns drive coverage-first
+            // (round-robin) selection; reward columns accumulate full-run Tier outcomes for the
+            // (deferred) exploit/prune policies. Additive + reversible. See SEED_POOL_TRACKING_PLAN.md.
+            """
+            CREATE TABLE IF NOT EXISTS phase0_seed_stats (
+                seed_id        TEXT PRIMARY KEY,
+                ordinal        INTEGER,
+                year           INTEGER NOT NULL,
+                created_at     TEXT NOT NULL,
+                times_started  INTEGER NOT NULL DEFAULT 0,
+                last_used_at   TEXT,
+                best_tier1     INTEGER,
+                best_tier2     INTEGER,
+                best_tier3     INTEGER,
+                sum_tier1      INTEGER NOT NULL DEFAULT 0,
+                sum_tier2      INTEGER NOT NULL DEFAULT 0,
+                sum_tier3      INTEGER NOT NULL DEFAULT 0,
+                runs_scored    INTEGER NOT NULL DEFAULT 0
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_seed_stats_lru ON phase0_seed_stats(year, times_started, last_used_at)"
         };
         try (Statement stmt = connection.createStatement()) {
             for (String sql : migrations) {

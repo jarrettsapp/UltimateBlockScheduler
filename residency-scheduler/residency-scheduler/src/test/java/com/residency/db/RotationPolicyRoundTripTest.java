@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Round-trips a rotation policy through SQLite to lock in the weeks-in-DB /
- * slots-in-memory convention (REVIEW.md M2/M4). The DAO stores allowed block
+ * slots-in-memory convention (PROJECT.md Code review, M2/M4). The DAO stores allowed block
  * lengths in WEEKS but exposes them in 2-week slots; this test asserts both
  * the persisted column value and the converted-back in-memory value.
  *

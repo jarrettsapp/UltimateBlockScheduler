@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Semantics tests for the rule-based hard constraints that previously had no
- * coverage (REVIEW.md M4): prerequisites, sequence/adjacency rules, and the
+ * coverage (PROJECT.md Code review, M4): prerequisites, sequence/adjacency rules, and the
  * per-resident max-blocks (slot) cap.
  *
  * Each test builds a tiny model, applies one constraint family, pins down an
@@ -180,7 +180,7 @@ class RuleConstraintTest {
 
     @Test
     void requiredMinimum_enforcesFullSlotCount_evenWithHalfBlockSegments() {
-        // RULES_REVIEW B1: a 2-block (=4-slot) requirement on a rotation that allows
+        // RULES.md §13 (B1): a 2-block (=4-slot) requirement on a rotation that allows
         // 2-week (1-slot) segments must enforce 4 slots. The old ceil(minBlocks)*minLen
         // formula enforced only 2 here (minLen=1), letting a resident be under-scheduled.
         Fixture f = new Fixture(12, new int[]{1}); // half-block-only rotation

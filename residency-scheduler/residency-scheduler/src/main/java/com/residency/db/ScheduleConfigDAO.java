@@ -79,7 +79,7 @@ public class ScheduleConfigDAO extends BaseDAO {
 
     public void saveRotationPolicy(ScheduleConfig.RotationPolicy policy) throws SQLException {
         // allowedBlockLengths is held in 2-week slots in memory; the DB column is in
-        // weeks. Convert slots -> weeks for storage. See ScheduleUnits / REVIEW.md M2.
+        // weeks. Convert slots -> weeks for storage. See ScheduleUnits / PROJECT.md Code review, M2.
         String lengths = Arrays.stream(policy.allowedBlockLengths)
             .mapToObj(l -> String.valueOf(ScheduleUnits.slotsToWeeks(l))).collect(Collectors.joining(","));
         String sql = """
@@ -308,5 +308,29 @@ public class ScheduleConfigDAO extends BaseDAO {
             ps.setString(2, value);
             ps.executeUpdate();
         }
+    }
+
+    // ── Raw key/value store ────────────────────────────────────────────────
+    // Generic single-string get/put against the schedule_config table, used by the
+    // Phase-0 feasible-assignment cache (PHASE0_FIX=cache). These do NOT go through
+    // applyConfigEntry, so they are invisible to loadConfig() — purely side-channel
+    // storage keyed by an arbitrary config_key. Safe/reversible: deleting the key
+    // (or the row) simply disables the cache and falls back to a cold solve.
+
+    /** Stores an arbitrary string under {@code key} (upsert). */
+    public void saveRawValue(String key, String value) throws SQLException {
+        upsertKey(key, value);
+    }
+
+    /** Loads the string stored under {@code key}, or {@code null} if absent. */
+    public String loadRawValue(String key) throws SQLException {
+        String sql = "SELECT config_value FROM schedule_config WHERE config_key = ?";
+        try (PreparedStatement ps = getConn().prepareStatement(sql)) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getString(1);
+            }
+        }
+        return null;
     }
 }

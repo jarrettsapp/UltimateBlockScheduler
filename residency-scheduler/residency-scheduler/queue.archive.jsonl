@@ -1,0 +1,16 @@
+# archived 2026-06-23T06:22:17: cfgR3-01-r1=DONE(v22,2/6/17) cfgR3-01-r2=DONE(v23,2/5/18) cfgR3-01-r3=FAILED(v24,1/10/14)
+{"label":"cfgR3-01","floor":false,"target":2,"weight":75,"runs":3}
+# archived 2026-06-23T06:22:17: cfgR3-02-r1=DONE(v25,2/6/17) cfgR3-02-r2=DONE(v26,2/4/19) cfgR3-02-r3=DONE(v27,1/6/18)
+{"label":"cfgR3-02","floor":false,"target":2,"weight":120,"runs":3}
+# archived 2026-06-23T06:22:17: cfgR3-03-r1=DONE(v28,2/4/19) cfgR3-03-r2=DONE(v29,3/4/18)
+{"label":"cfgR3-03","floor":false,"target":2,"weight":95,"runs":2}
+# archived 2026-06-23T06:22:17: cfgR3-04-r1=DONE(v30,0/9/16)
+{"label":"cfgR3-04","floor":false,"target":2,"weight":250,"runs":1}
+# archived 2026-06-23T06:22:17: cfgR3-05-r1=DONE(v31,2/5/18)
+{"label":"cfgR3-05","floor":false,"target":2,"weight":120,"runs":1,"budget":[900,300,300,3600]}
+# archived 2026-06-23T09:13:22: cfgR4-01-r1=DONE(v32,1/7/17) cfgR4-01-r2=DONE(v33,2/4/19) cfgR4-01-r3=DONE(v34,2/4/19) cfgR4-01-r4=DONE(v35,1/7/17)
+{"label":"cfgR4-01","floor":false,"target":2,"weight":95,"runs":4,"budget":[900,300,300,3000]}
+# archived 2026-06-23T10:05:25: cfgR4-02-r1=DONE(v36,3/4/18)
+{"label":"cfgR4-02","floor":false,"target":2,"weight":85,"runs":1,"budget":[900,300,300,3000]}
+# archived 2026-06-23T11:07:26: cfgR4-03-r1=DONE(v37,3/3/19)
+{"label":"cfgR4-03","floor":false,"target":2,"weight":110,"runs":1,"budget":[900,300,300,3000]}

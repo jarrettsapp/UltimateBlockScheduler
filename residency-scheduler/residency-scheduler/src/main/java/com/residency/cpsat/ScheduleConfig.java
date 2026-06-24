@@ -48,7 +48,7 @@ public class ScheduleConfig {
      * When true, the solver enforces a HARD floor of ZERO volunteer weekends — every weekend
      * must have at least one eligible categorical Sunday-Y7 coverer (on a Sunday-source
      * rotation, not heavy that block, not entering heavy the next block). Proven achievable
-     * (see SCHEDULE_VERSIONING_PLAN / coverage-floor analysis: 0 volunteers is feasible with
+     * (see RULES.md §11, the coverage-floor proof: 0 volunteers is feasible with
      * the full heavy load and capacity caps). Default OFF — flip on to eliminate the volunteer
      * fallback entirely; flip off to revert if the transition tradeoff isn't worth it.
      */

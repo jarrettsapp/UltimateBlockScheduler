@@ -18,12 +18,14 @@ The SQLite database is created automatically on first launch.
 
 ## Key Documentation
 
+Documentation is consolidated into three master docs (each with its own table of contents):
+
 | Document | Contents |
 |----------|----------|
-| `SCHEDULING_RULES.md` | The authoritative, plain-English rule set with enforcement tags (solver-hard / soft / operational) and a hand-audit checklist |
-| `COVERAGE_FLOOR_FINDINGS.md` | Proof that the volunteer-weekend floor is 0, and the reversible hard-floor fix |
-| `SCHEDULE_ITERATION_REPORT.md` | Side-by-side comparison of the real-world schedule and app versions |
-| `REVIEW.md` / `RULES_REVIEW.md` | Code-review and rule-encoding findings with resolution status |
+| [`RULES.md`](RULES.md) | **Domain master** — the authoritative rule set with enforcement tags (solver-hard / soft / operational), the zero-volunteer coverage-floor proof, the block↔call cross-project review, the encoded-vs-real rule review, and a hand-audit checklist |
+| [`OPERATIONS.md`](OPERATIONS.md) | **Operator master** — how to run the solver: the one-command autonomous sweep, running a single config by hand, standard budgets, conventions, and troubleshooting |
+| [`PROJECT.md`](PROJECT.md) | **Engineering master** — current status, key findings, open trackers, known bugs, planned work, the resolved code-review findings (H1–H3, M1–M4), and design assessments |
+| [`SCHEDULE_ITERATION_REPORT.md`](SCHEDULE_ITERATION_REPORT.md) | Side-by-side comparison of the real-world schedule and app versions (auto-maintained by the sweep) |
 
 ---
 

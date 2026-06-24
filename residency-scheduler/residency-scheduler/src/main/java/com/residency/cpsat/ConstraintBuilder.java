@@ -264,7 +264,7 @@ public class ConstraintBuilder {
                     // 1.0 = two slots). Convert directly to slots. The previous formula
                     // ceil(minBlocks)*minLen under-enforced requirements on rotations that
                     // allow a 2-week segment (minLen=1) — e.g. a 2-block VA requirement
-                    // enforced only 2 slots instead of 4. See RULES_REVIEW finding B1.
+                    // enforced only 2 slots instead of 4. See RULES.md §13 (finding B1).
                     minBlocks = ScheduleUnits.blocksToSlots(req.getMinBlocks());
                     // Never require more than the rotation's own max.
                     minBlocks = Math.min(minBlocks, maxBlocks);

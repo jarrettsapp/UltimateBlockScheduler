@@ -56,7 +56,20 @@
 <body>
 
 <h1>Residency Block Schedule — Comparison Report</h1>
-<div class="subtitle">Comparing the current in-use schedule against successive computer-optimized versions &middot; Academic Year 2 &middot; 11 categorical interns &middot; June 18, 2026</div>
+<div class="subtitle">Comparing the current in-use schedule against successive computer-optimized versions &middot; Academic Year 2 &middot; 11 categorical interns &middot; Updated June 21, 2026</div>
+
+<div class="callout" style="border:3px solid #b00; background:#fff3f3; padding:14px; margin:16px 0;">
+<strong style="color:#b00; font-size:1.05em;">&#9888; CONSTRAINT-FIX BOUNDARY &mdash; June 23, 2026 (read before comparing runs).</strong>
+<p>A correctness fix to the <em>hard</em> scheduling constraints landed on <strong>2026-06-23</strong>
+(finding I1). <strong>Every run and schedule shown in this report was produced BEFORE that fix, against
+the OLD constraints. All sequential schedule reviews below are a historical baseline and are NOT
+apples-to-apples with any run made on or after 2026-06-23.</strong></p>
+<p><strong>What changed:</strong> the rules barring each heavy rotation from immediately following a
+Sunday-call source pointed at <em>Outpatient GI</em> instead of <em>Inpatient GI</em>; and
+Inpatient&nbsp;GI&nbsp;&rarr;&nbsp;Younker&nbsp;7&nbsp;Nights was wholly unprotected. Both are fixed in
+the live database. A fresh post-fix baseline begins with the next run.</p>
+</div>
+
 
 <div class="callout">
 <strong>What this is, in one paragraph.</strong> Each intern rotates through a year of
@@ -64,8 +77,8 @@
 re-arranges those assignments to better satisfy the program's real-world rules &mdash;
 especially making sure every weekend has someone <em>available and rested</em> to take
 Younker&nbsp;7 night call, while avoiding punishing back-to-back stretches of heavy
-rotations. This report shows how the today's hand-built schedule compares to three
-successive versions the tool produced (v1 &rarr; v3), measured the same way for all four.
+rotations. This report shows how the today's hand-built schedule compares to ten
+successive versions the tool produced (v1 &rarr; v10), measured the same way for all.
 </div>
 
 <h2>The four metrics that matter (plain English)</h2>
@@ -100,55 +113,59 @@ the reason they carry call.
     <th>Current<br>(hand-built)</th>
     <th>Tool v1</th>
     <th>Tool v2</th>
-    <th>Tool v3<br>(recommended)</th>
+    <th>Tool v3</th>
+    <th>Tool v7 &#9733; best coverage</th>
+    <th>Tool v8&ndash;v9<br>(model fixes)</th>
+    <th>Tool v10<br>(latest)</th>
   </tr>
   <tr>
     <td><strong>Volunteer weekends</strong> (none is the goal)</td>
-    <td class="bad">4</td><td>1</td><td class="good">0</td><td class="best">0</td>
+    <td class="bad">4</td><td>1</td><td class="good">0</td><td class="good">0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td>
   </tr>
   <tr>
     <td>Fragile (1-person) weekends</td>
-    <td>8</td><td>12</td><td>8</td><td class="best">5</td>
+    <td>8</td><td>12</td><td>8</td><td class="best">5</td><td>11</td><td>&mdash;</td><td>13</td>
   </tr>
   <tr>
     <td>Healthy (2+ person) weekends, out of 25</td>
-    <td>13</td><td>12</td><td>17</td><td class="best">20</td>
+    <td>13</td><td>12</td><td>17</td><td class="best">20</td><td>14</td><td>&mdash;</td><td>12</td>
   </tr>
   <tr>
     <td>Abrupt heavy&rarr;heavy switches</td>
-    <td class="bad">5</td><td class="good">0</td><td class="good">0</td><td class="best">0</td>
+    <td class="bad">5</td><td class="good">0</td><td class="good">0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td>
   </tr>
   <tr>
     <td>Heavy stretches over 6 weeks</td>
-    <td>0</td><td>0</td><td>0</td><td>1 <span class="legend">(a mild 8-wk run)</span></td>
+    <td>0</td><td>0</td><td>0</td><td>1 <span class="legend">(mild 8-wk)</span></td><td class="best">0</td><td class="best">0</td><td class="best">0</td>
   </tr>
   <tr>
     <td>Heavy stretches of 10+ weeks (avoid)</td>
-    <td>0</td><td>0</td><td>0</td><td class="best">0</td>
+    <td>0</td><td>0</td><td>0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td>
   </tr>
   <tr>
-    <td>Saturday gaps <span class="legend">(fixed by the math &mdash; same for all)</span></td>
-    <td>4</td><td>4</td><td>4</td><td>4</td>
+    <td>Capacity clean (all blocks)</td>
+    <td class="legend">n/a</td><td class="good">yes</td><td class="good">yes</td><td class="good">yes</td><td class="best">yes</td><td class="best">yes</td><td class="best">yes</td>
   </tr>
   <tr>
-    <td>Younker&nbsp;8 Pulm load per intern</td>
-    <td>even</td><td>even</td><td>even</td><td>even</td>
+    <td>Saturday gaps <span class="legend">(same for all by math)</span></td>
+    <td>4</td><td>4</td><td>4</td><td>4</td><td>4</td><td>4</td><td>4</td>
   </tr>
   <tr>
     <td>Core clinical-rule violations</td>
-    <td class="legend">n/a</td><td class="good">0</td><td class="good">0</td><td class="best">0</td>
+    <td class="legend">n/a</td><td class="good">0</td><td class="good">0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td><td class="best">0</td>
   </tr>
 </table>
-<p class="legend">Green = best / at the theoretical floor. Red = the problem that version of the schedule has.</p>
+<p class="legend">Green = best / at the theoretical floor. Red = the problem that version had. &#9733; v7 = best on fragile/healthy within the zero-volunteer hard-floor model. v8&ndash;v9 = intermediate model-hardening runs; coverage metrics not stored. v10 = latest saved version.</p>
 
 <div class="callout">
 <strong>The bottom line.</strong> Every tool-generated version fixes the two real
 weaknesses of today's hand-built schedule: it had <strong>4 weekends with no available
 intern</strong> (forcing volunteers) and <strong>5 abrupt heavy-to-heavy switches</strong>.
-The recommended version (v3) drives volunteer weekends to <strong>zero</strong>, removes
-<strong>all</strong> abrupt switches, and gives the most weekends with a healthy 2+ interns
-available &mdash; at the cost of a single, mild 8-week stretch (explained below). It never
-once exceeds the 10-week limit the program asks us to avoid.
+From v2 onward, volunteer weekends reach <strong>zero</strong> and stay there &mdash; including
+through v7&ndash;v10 where this is enforced as a <em>hard constraint</em>. The best coverage
+result (v3: 5 fragile / 20 healthy) came before the hard floor. Within the hard-floor model
+(v7+), v7 holds the best fragile/healthy numbers (11 / 14). All versions from v7 onward are
+also fully capacity-clean with zero abrupt transitions.
 </div>
 
 <h2>How the schedule improved, step by step</h2>
@@ -207,19 +224,54 @@ who appear to have only one night block are the two assigned the Elective instea
 exactly as the program's rules intend.
 </div>
 
+<h3>Tool v7 &mdash; zero-volunteer <em>hard floor</em> + 2&times;2-hr solve (&#9733; best on coverage within the hard-floor model)</h3>
+<ul>
+  <li><span class="good">Volunteer weekends: 0</span> &mdash; now guaranteed by a <strong>hard constraint</strong>, not just a soft objective. A CP-SAT prover confirmed the floor is achievable before the main solve ran.</li>
+  <li>Fragile weekends: <strong>11</strong>; healthy: <strong>14&nbsp;/ 25</strong>. These are higher/lower than v3's 5&nbsp;/ 20, but the comparison is unfair: v3 had no hard floor and could freely move coverers across weekends v7's constraint locks in place. Within the hard-floor model, 11&nbsp;/ 14 is the best observed.</li>
+  <li><strong>Heavy&rarr;heavy: 0</strong> ✓ &mdash; maintained across all app versions.</li>
+  <li><strong>Runs &gt; 6 weeks: 0</strong> ✓ &mdash; the 8-week run from v3 is gone.</li>
+  <li>Capacity clean ✓ &mdash; all ICU / VA / BMC / Y7D caps satisfied in every block.</li>
+</ul>
+
+<h3>Tool v8 &mdash; hard heavy&rarr;heavy ban + Tier-3 soft cap (intermediate)</h3>
+<ul>
+  <li>The heavy&rarr;heavy transition moved from a <em>soft penalty</em> to a <strong>hard constraint</strong> &mdash; structurally impossible rather than merely discouraged.</li>
+  <li>A per-rotation categorical soft cap (Tier-3) gently discourages over-concentration of any rotation for one intern.</li>
+  <li>A 12-week consecutive run limit was corrected (off-by-one fix) and its semantics made explicit.</li>
+  <li>Volunteer weekends: 0 ✓; runs&nbsp;&gt;&nbsp;6&nbsp;wk: 0 ✓. Coverage metrics not stored for this intermediate run.</li>
+</ul>
+
+<h3>Tool v9 &mdash; Phase-3 repair hints ("after Dino changes")</h3>
+<ul>
+  <li>Phase&nbsp;3 now seeds from the Phase-2 solution instead of starting cold, making late-stage improvements more productive.</li>
+  <li>Volunteer weekends: 0 ✓. Full metrics not recoverable (database index corruption).</li>
+</ul>
+
+<h3>Tool v10 &mdash; longer solve, HM-penalty tuning (current latest)</h3>
+<ul>
+  <li><span class="good">Volunteer weekends: 0</span> ✓ &mdash; zero-volunteer floor maintained.</li>
+  <li>Fragile weekends: <strong>13</strong>; healthy: <strong>12&nbsp;/ 25</strong> &mdash; a slight regression from v7's 11&nbsp;/ 14. The additional model constraints (hard heavy&rarr;heavy ban, Tier-3 cap) reduce the solver's freedom to spread coverers.</li>
+  <li><strong>Heavy&rarr;heavy: 0</strong> ✓ &mdash; structurally guaranteed by a hard constraint.</li>
+  <li><strong>Runs &gt; 6 weeks: 0</strong> ✓; capacity clean ✓.</li>
+  <li>The "Longer HM" label reflects a longer Phase-3 solve and tuned heavy+medium penalty weight. These model improvements set the stage for future runs to close the gap with v7.</li>
+</ul>
+
 <h2>Recommendation</h2>
 <p>
-<strong>Adopt Tool v3.</strong> It is the strongest version on the metric that matters most
-&mdash; it completely eliminates weekends with no available intern &mdash; while also
-removing every abrupt heavy-to-heavy switch and maximizing the number of weekends with a
-comfortable 2+ interns available. Its only cost is one mild, fully-buffered 8-week stretch
-that stays within the program's stated tolerance. All tool versions equally respect the
-core clinical rules and distribute the heaviest rotations evenly.
+<strong>v7 remains the strongest production-ready version.</strong> It completely eliminates
+weekends with no available intern (now enforced as a hard constraint, structurally guaranteed),
+removes every abrupt heavy-to-heavy switch, and stays within the 6-week run limit &mdash;
+all while being fully capacity-clean. Its 11 fragile / 14 healthy coverage is the best
+achieved within the hard-floor model. The model improvements in v8&ndash;v10 are correctness
+and fairness upgrades (hard h&rarr;h ban, Tier-3 cap, repair hints) that did not yet improve
+on v7's coverage numbers but strengthen the solver for future longer solves.
 </p>
 
 <h2>The schedules, visually (for verification)</h2>
 <p>Each row is one intern (A&ndash;K); each column is a 2-week block (1a through 13b, the full year).
-Cells are lightly shaded by workload tier so heavy stretches and transitions are easy to scan.</p>
+Cells are lightly shaded by workload tier so heavy stretches and transitions are easy to scan.
+Shown: the hand-built current schedule, v3 (best coverage pre-floor), and v10 (current latest).
+v7 grid data is not available as a separate snapshot (it predates the versioning system).</p>
 <div class="gridlegend">
   <span class="lh">Heavy</span> <span class="lm">Medium / consult</span> <span class="ll">Light</span>
 </div>
@@ -562,7 +614,7 @@ Cells are lightly shaded by workload tier so heavy stretches and transitions are
 </tr>
 </tbody></table>
 <div class="gridgap"></div>
-<div class="gridtitle">Recommended schedule v3 - residents A-K</div>
+<div class="gridtitle">App v3 schedule (best coverage, 45-min solve) - residents A-K</div>
 <table class="schedgrid"><thead><tr><th class="rh">Res</th>
 <th>1a</th>
 <th>1b</th>
@@ -900,6 +952,2181 @@ Cells are lightly shaded by workload tier so heavy stretches and transitions are
 <td class="t-h">BMC</td>
 </tr>
 </tbody></table>
+<div class="gridgap"></div>
+<div class="gridtitle">App v10 schedule (latest &mdash; Longer HM solve, hard h&rarr;h ban) - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th><th>1b</th><th>2a</th><th>2b</th><th>3a</th><th>3b</th><th>4a</th><th>4b</th>
+<th>5a</th><th>5b</th><th>6a</th><th>6b</th><th>7a</th><th>7b</th><th>8a</th><th>8b</th>
+<th>9a</th><th>9b</th><th>10a</th><th>10b</th><th>11a</th><th>11b</th><th>12a</th><th>12b</th>
+<th>13a</th><th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-l">OPC UPH</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-m">ID</td><td class="t-l">ER</td><td class="t-h">ICU</td><td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td><td class="t-h">Y7N</td><td class="t-m">GI</td><td class="t-l">AMB A</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB GI</td><td class="t-l">Elec</td>
+<td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">OPC TIC</td><td class="t-l">AMB P</td><td class="t-h">Y8</td><td class="t-l">AMB P</td><td class="t-h">Y8</td><td class="t-l">AMB A</td>
+<td class="t-h">VA</td><td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ADDMED</td><td class="t-h">Y7N</td><td class="t-l">OPC TIC</td><td class="t-l">AMB A</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td><td class="t-l">OPC UPH</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB A</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">AMB P</td>
+<td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">ER</td><td class="t-h">VA</td>
+<td class="t-h">VA</td><td class="t-l">AMB P</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB GI</td><td class="t-l">OPC UPH</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB P</td><td class="t-h">VA</td>
+<td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">Y7N</td><td class="t-l">OPC TIC</td><td class="t-h">Y8</td><td class="t-l">AMB GI</td><td class="t-l">AMB A</td><td class="t-h">VA</td>
+<td class="t-h">VA</td><td class="t-l">AMB A</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">ADDMED</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-m">GI</td>
+<td class="t-l">ER</td><td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-l">AMB GI</td><td class="t-l">OPC UPH</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB GI</td><td class="t-m">ID</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">OPC TIC</td><td class="t-h">Y8</td>
+<td class="t-h">Y8</td><td class="t-l">ER</td><td class="t-h">VA</td><td class="t-l">AMB A</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB P</td><td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td><td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB A</td><td class="t-m">ID</td><td class="t-l">ER</td><td class="t-h">Y7N</td><td class="t-m">GI</td><td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td><td class="t-h">Y8</td><td class="t-l">OPC TIC</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td>
+<td class="t-l">AMB GI</td><td class="t-l">AMB P</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">OPC UPH</td><td class="t-h">Y8</td><td class="t-l">AMB GI</td><td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td><td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">Y8</td><td class="t-l">OPC TIC</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">ER</td>
+<td class="t-m">ID</td><td class="t-l">AMB A</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td><td class="t-h">Y8</td><td class="t-l">OPC UPH</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB A</td><td class="t-h">Y7N</td><td class="t-l">AMB P</td>
+<td class="t-h">BMC</td><td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">ER</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-l">AMB A</td><td class="t-h">Y8</td>
+<td class="t-h">Y8</td><td class="t-l">AMB GI</td><td class="t-m">ID</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">OPC UPH</td><td class="t-h">BMC</td><td class="t-h">BMC</td>
+<td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">Y7N</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-l">ADDMED</td><td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td><td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-m">ID</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">AMB A</td><td class="t-h">Y7N</td><td class="t-l">ADDMED</td><td class="t-h">VA</td><td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td><td class="t-l">ER</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB GI</td><td class="t-l">AMB P</td><td class="t-h">ICU</td><td class="t-h">ICU</td>
+<td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">OPC TIC</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB A</td><td class="t-h">Y8</td>
+<td class="t-h">Y8</td><td class="t-l">AMB GI</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">OPC UPH</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB P</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">ADDMED</td><td class="t-h">Y7N</td><td class="t-l">AMB A</td>
+<td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-l">AMB GI</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ER</td>
+<td class="t-h">Y7D</td><td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-l">AMB A</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">AMB P</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB GI</td><td class="t-l">AMB A</td>
+<td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ER</td><td class="t-l">AMB P</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">Elec</td><td class="t-m">GI</td>
+<td class="t-m">ID</td><td class="t-l">OPC TIC</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB GI</td><td class="t-l">ADDMED</td><td class="t-h">VA</td><td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td><td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-m">GI</td><td class="t-l">AMB GI</td><td class="t-l">AMB P</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">OPC UPH</td><td class="t-h">BMC</td><td class="t-h">BMC</td>
+<td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ADDMED</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB P</td><td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td><td class="t-h">Y7N</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ER</td><td class="t-h">ICU</td><td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td><td class="t-m">ID</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">App cfgA &mdash; balanced soft (floor OFF, target=2, weight=75): vol=1 / fragile=6 / healthy=18 &#9670; NEW BEST coverage profile - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th><th>1b</th><th>2a</th><th>2b</th><th>3a</th><th>3b</th><th>4a</th><th>4b</th><th>5a</th><th>5b</th><th>6a</th><th>6b</th><th>7a</th><th>7b</th><th>8a</th><th>8b</th><th>9a</th><th>9b</th><th>10a</th><th>10b</th><th>11a</th><th>11b</th><th>12a</th><th>12b</th><th>13a</th><th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-l">OPC UPH</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">OPC TIC</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">ER</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB GI</td><td class="t-l">AMB A</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ADDMED</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">OPC UPH</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">OPC TIC</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB GI</td><td class="t-l">AMB P</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ER</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB A</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">ADDMED</td><td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB GI</td><td class="t-l">OPC UPH</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">OPC TIC</td><td class="t-h">Y7N</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">AMB GI</td><td class="t-l">ER</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ADDMED</td><td class="t-l">AMB A</td><td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-h">Y8</td><td class="t-l">OPC UPH</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-m">ID</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">OPC TIC</td><td class="t-h">Y8</td><td class="t-l">AMB P</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB A</td><td class="t-h">Y7N</td><td class="t-l">ER</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-l">ADDMED</td><td class="t-l">AMB A</td><td class="t-h">BMC</td><td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-l">OPC TIC</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB GI</td><td class="t-l">OPC UPH</td><td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-l">ER</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB A</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">AMB A</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">ADDMED</td><td class="t-h">Y7N</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-l">Elec</td><td class="t-m">ID</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-l">OPC UPH</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">OPC TIC</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-l">ER</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">AMB A</td><td class="t-m">ID</td><td class="t-l">AMB A</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB P</td><td class="t-l">ADDMED</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB GI</td><td class="t-l">Elec</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB P</td><td class="t-l">AMB GI</td><td class="t-l">OPC TIC</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB A</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">OPC UPH</td><td class="t-h">Y7N</td><td class="t-l">ADDMED</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB P</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">ER</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">AMB GI</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-m">ID</td><td class="t-l">AMB P</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB A</td><td class="t-h">Y7N</td><td class="t-l">AMB A</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">ER</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">OPC TIC</td><td class="t-h">Y7N</td><td class="t-l">AMB GI</td><td class="t-m">GI</td><td class="t-l">AMB GI</td><td class="t-l">ADDMED</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">OPC UPH</td><td class="t-h">VA</td><td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">OPC TIC</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">AMB GI</td><td class="t-m">ID</td><td class="t-l">AMB A</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">OPC UPH</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ER</td><td class="t-h">Y8</td><td class="t-l">ADDMED</td><td class="t-h">Y7N</td><td class="t-l">AMB GI</td><td class="t-l">AMB P</td><td class="t-h">Y8</td><td class="t-l">AMB P</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">OPC UPH</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">ADDMED</td><td class="t-h">Y8</td><td class="t-l">AMB P</td><td class="t-h">Y7N</td><td class="t-l">AMB A</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">AMB GI</td><td class="t-m">ID</td><td class="t-l">OPC TIC</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">ER</td><td class="t-m">GI</td><td class="t-h">Y7N</td><td class="t-l">AMB GI</td><td class="t-l">AMB P</td><td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">ER</td><td class="t-h">Y7N</td><td class="t-m">ID</td><td class="t-l">AMB A</td><td class="t-h">ICU</td><td class="t-h">ICU</td><td class="t-l">AMB GI</td><td class="t-l">AMB A</td><td class="t-h">BMC</td><td class="t-h">BMC</td><td class="t-l">AMB P</td><td class="t-l">ADDMED</td><td class="t-h">Y7D</td><td class="t-h">Y7D</td><td class="t-l">AMB P</td><td class="t-h">VA</td><td class="t-h">VA</td><td class="t-l">OPC UPH</td><td class="t-h">Y8</td><td class="t-h">Y8</td><td class="t-l">OPC TIC</td><td class="t-h">Y7N</td><td class="t-l">AMB GI</td><td class="t-m">GI</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">App cfgB &mdash; aggressive (floor OFF, target=3, weight=150): vol=3 / fragile=8 / healthy=14 (worse than cfgA) - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th>
+<th>1b</th>
+<th>2a</th>
+<th>2b</th>
+<th>3a</th>
+<th>3b</th>
+<th>4a</th>
+<th>4b</th>
+<th>5a</th>
+<th>5b</th>
+<th>6a</th>
+<th>6b</th>
+<th>7a</th>
+<th>7b</th>
+<th>8a</th>
+<th>8b</th>
+<th>9a</th>
+<th>9b</th>
+<th>10a</th>
+<th>10b</th>
+<th>11a</th>
+<th>11b</th>
+<th>12a</th>
+<th>12b</th>
+<th>13a</th>
+<th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-m">ID</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ER</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ER</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">Elec</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-l">AMB A</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">Elec</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">App cfgC &mdash; floor ON (target=3, weight=150): vol=0 / fragile=11 / healthy=14 (ties v7; hard floor caps gains) - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th>
+<th>1b</th>
+<th>2a</th>
+<th>2b</th>
+<th>3a</th>
+<th>3b</th>
+<th>4a</th>
+<th>4b</th>
+<th>5a</th>
+<th>5b</th>
+<th>6a</th>
+<th>6b</th>
+<th>7a</th>
+<th>7b</th>
+<th>8a</th>
+<th>8b</th>
+<th>9a</th>
+<th>9b</th>
+<th>10a</th>
+<th>10b</th>
+<th>11a</th>
+<th>11b</th>
+<th>12a</th>
+<th>12b</th>
+<th>13a</th>
+<th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ADDMED</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-m">ID</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-m">ID</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">Elec</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ER</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-l">AMB P</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">Elec</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">App cfgD &mdash; OFF/2/120: vol=1 / fragile=7 / healthy=17, ZERO long runs (Round 2) - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th>
+<th>1b</th>
+<th>2a</th>
+<th>2b</th>
+<th>3a</th>
+<th>3b</th>
+<th>4a</th>
+<th>4b</th>
+<th>5a</th>
+<th>5b</th>
+<th>6a</th>
+<th>6b</th>
+<th>7a</th>
+<th>7b</th>
+<th>8a</th>
+<th>8b</th>
+<th>9a</th>
+<th>9b</th>
+<th>10a</th>
+<th>10b</th>
+<th>11a</th>
+<th>11b</th>
+<th>12a</th>
+<th>12b</th>
+<th>13a</th>
+<th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB P</td>
+<td class="t-m">GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">Elec</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">Elec</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">App cfgD-robust &mdash; OFF/2/120 (30min/phase): vol=1 / fragile=6 / healthy=18, objective plateaued ~16min (ties best) - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th>
+<th>1b</th>
+<th>2a</th>
+<th>2b</th>
+<th>3a</th>
+<th>3b</th>
+<th>4a</th>
+<th>4b</th>
+<th>5a</th>
+<th>5b</th>
+<th>6a</th>
+<th>6b</th>
+<th>7a</th>
+<th>7b</th>
+<th>8a</th>
+<th>8b</th>
+<th>9a</th>
+<th>9b</th>
+<th>10a</th>
+<th>10b</th>
+<th>11a</th>
+<th>11b</th>
+<th>12a</th>
+<th>12b</th>
+<th>13a</th>
+<th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">ADDMED</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ADDMED</td>
+<td class="t-m">ID</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-m">GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">Elec</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ADDMED</td>
+<td class="t-m">ID</td>
+<td class="t-l">Elec</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">cfgD-r1 - OFF/2/120: vol3/frag2/heal20 - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th>
+<th>1b</th>
+<th>2a</th>
+<th>2b</th>
+<th>3a</th>
+<th>3b</th>
+<th>4a</th>
+<th>4b</th>
+<th>5a</th>
+<th>5b</th>
+<th>6a</th>
+<th>6b</th>
+<th>7a</th>
+<th>7b</th>
+<th>8a</th>
+<th>8b</th>
+<th>9a</th>
+<th>9b</th>
+<th>10a</th>
+<th>10b</th>
+<th>11a</th>
+<th>11b</th>
+<th>12a</th>
+<th>12b</th>
+<th>13a</th>
+<th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-m">GI</td>
+<td class="t-l">Elec</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">ER</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">Elec</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+</tr>
+</tbody></table>
+
+<div class="gridtitle">cfgD-r2 - OFF/2/120: vol1/frag6/heal18 - residents A-K</div>
+<table class="schedgrid"><thead><tr><th class="rh">Res</th>
+<th>1a</th>
+<th>1b</th>
+<th>2a</th>
+<th>2b</th>
+<th>3a</th>
+<th>3b</th>
+<th>4a</th>
+<th>4b</th>
+<th>5a</th>
+<th>5b</th>
+<th>6a</th>
+<th>6b</th>
+<th>7a</th>
+<th>7b</th>
+<th>8a</th>
+<th>8b</th>
+<th>9a</th>
+<th>9b</th>
+<th>10a</th>
+<th>10b</th>
+<th>11a</th>
+<th>11b</th>
+<th>12a</th>
+<th>12b</th>
+<th>13a</th>
+<th>13b</th>
+</tr></thead><tbody>
+<tr><th class="rh">A</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+</tr>
+<tr><th class="rh">B</th>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+</tr>
+<tr><th class="rh">C</th>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB P</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">D</th>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+</tr>
+<tr><th class="rh">E</th>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-l">ER</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">Elec</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+</tr>
+<tr><th class="rh">F</th>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">ADDMED</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+<tr><th class="rh">G</th>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">ER</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+</tr>
+<tr><th class="rh">H</th>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+</tr>
+<tr><th class="rh">I</th>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">ER</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-m">ID</td>
+<td class="t-l">AMB GI</td>
+</tr>
+<tr><th class="rh">J</th>
+<td class="t-m">GI</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB A</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">Elec</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">OPC UPH</td>
+<td class="t-l">AMB GI</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+</tr>
+<tr><th class="rh">K</th>
+<td class="t-l">OPC UPH</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">AMB A</td>
+<td class="t-h">ICU</td>
+<td class="t-h">ICU</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">AMB A</td>
+<td class="t-m">GI</td>
+<td class="t-h">Y7N</td>
+<td class="t-m">ID</td>
+<td class="t-l">ER</td>
+<td class="t-h">BMC</td>
+<td class="t-h">BMC</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">Y8</td>
+<td class="t-h">Y8</td>
+<td class="t-l">AMB GI</td>
+<td class="t-l">ADDMED</td>
+<td class="t-h">Y7N</td>
+<td class="t-l">AMB P</td>
+<td class="t-h">VA</td>
+<td class="t-h">VA</td>
+<td class="t-l">OPC TIC</td>
+<td class="t-h">Y7D</td>
+<td class="t-h">Y7D</td>
+</tr>
+</tbody></table>
+
+<h2>Autonomous sweep results (auto-appended)</h2>
+<table id="sweep-summary" border="1" cellpadding="4" cellspacing="0">
+<tr><th>run</th><th>floor/target/weight</th><th>vol</th><th>frag</th><th>heal</th><th>h&rarr;h</th><th>runs&gt;6wk</th><th>ver</th><th>status</th><th>grid</th></tr>
+<tr><td>cfgD r1 (OFF/2/120)</td><td>OFF/2/120</td><td>1</td><td>7</td><td>17</td><td>0</td><td>2</td><td>21</td><td>DONE</td><td><a href="sweep_grids\cfgD_run1.html">grid</a></td></tr>
+<tr><td>cfgRESUME r1 (OFF/2/120)</td><td>OFF/2/120</td><td>1</td><td>8</td><td>16</td><td>0</td><td>2</td><td>22</td><td>DONE</td><td><a href="sweep_grids\cfgRESUME_run1.html">grid</a></td></tr>
+<tr><td>cfgR3-01 r1 (OFF/2/75)</td><td>OFF/2/75</td><td>2</td><td>6</td><td>17</td><td>0</td><td>1</td><td>22</td><td>DONE</td><td><a href="sweep_grids\cfgR3-01_run1.html">grid</a></td></tr>
+<tr><td>cfgR3-01 r2 (OFF/2/75)</td><td>OFF/2/75</td><td>2</td><td>5</td><td>18</td><td>0</td><td>1</td><td>23</td><td>DONE</td><td><a href="sweep_grids\cfgR3-01_run2.html">grid</a></td></tr>
+<tr><td>cfgR3-02 r1 (OFF/2/120)</td><td>OFF/2/120</td><td>2</td><td>6</td><td>17</td><td>0</td><td>0</td><td>25</td><td>DONE</td><td><a href="sweep_grids\cfgR3-02_run1.html">grid</a></td></tr>
+<tr><td>cfgR3-02 r2 (OFF/2/120)</td><td>OFF/2/120</td><td>2</td><td>4</td><td>19</td><td>0</td><td>0</td><td>26</td><td>DONE</td><td><a href="sweep_grids\cfgR3-02_run2.html">grid</a></td></tr>
+<tr><td>cfgR3-02 r3 (OFF/2/120)</td><td>OFF/2/120</td><td>1</td><td>6</td><td>18</td><td>0</td><td>1</td><td>27</td><td>DONE</td><td><a href="sweep_grids\cfgR3-02_run3.html">grid</a></td></tr>
+<tr><td>cfgR3-03 r1 (OFF/2/95)</td><td>OFF/2/95</td><td>2</td><td>4</td><td>19</td><td>0</td><td>0</td><td>28</td><td>DONE</td><td><a href="sweep_grids\cfgR3-03_run1.html">grid</a></td></tr>
+<tr><td>cfgR3-03 r2 (OFF/2/95)</td><td>OFF/2/95</td><td>3</td><td>4</td><td>18</td><td>0</td><td>3</td><td>29</td><td>DONE</td><td><a href="sweep_grids\cfgR3-03_run2.html">grid</a></td></tr>
+<tr><td>cfgR3-04 r1 (OFF/2/250)</td><td>OFF/2/250</td><td>0</td><td>9</td><td>16</td><td>0</td><td>2</td><td>30</td><td>DONE</td><td><a href="sweep_grids\cfgR3-04_run1.html">grid</a></td></tr>
+<tr><td>cfgR3-05 r1 (OFF/2/120)</td><td>OFF/2/120</td><td>2</td><td>5</td><td>18</td><td>0</td><td>1</td><td>31</td><td>DONE</td><td><a href="sweep_grids\cfgR3-05_run1.html">grid</a></td></tr>
+<tr><td>cfgR4-01 r1 (OFF/2/95)</td><td>OFF/2/95</td><td>1</td><td>7</td><td>17</td><td>0</td><td>0</td><td>32</td><td>DONE</td><td><a href="sweep_grids\cfgR4-01_run1.html">grid</a></td></tr>
+<tr><td>cfgR4-01 r2 (OFF/2/95)</td><td>OFF/2/95</td><td>2</td><td>4</td><td>19</td><td>0</td><td>1</td><td>33</td><td>DONE</td><td><a href="sweep_grids\cfgR4-01_run2.html">grid</a></td></tr>
+<tr><td>cfgR4-01 r3 (OFF/2/95)</td><td>OFF/2/95</td><td>2</td><td>4</td><td>19</td><td>0</td><td>1</td><td>34</td><td>DONE</td><td><a href="sweep_grids\cfgR4-01_run3.html">grid</a></td></tr>
+<tr><td>cfgR4-01 r4 (OFF/2/95)</td><td>OFF/2/95</td><td>1</td><td>7</td><td>17</td><td>0</td><td>0</td><td>35</td><td>DONE</td><td><a href="sweep_grids\cfgR4-01_run4.html">grid</a></td></tr>
+<tr><td>cfgR4-02 r1 (OFF/2/85)</td><td>OFF/2/85</td><td>3</td><td>4</td><td>18</td><td>0</td><td>1</td><td>36</td><td>DONE</td><td><a href="sweep_grids\cfgR4-02_run1.html">grid</a></td></tr>
+<tr><td>cfgR4-03 r1 (OFF/2/110)</td><td>OFF/2/110</td><td>3</td><td>3</td><td>19</td><td>0</td><td>0</td><td>37</td><td>DONE</td><td><a href="sweep_grids\cfgR4-03_run1.html">grid</a></td></tr>
+<tr><td>cfgR5-01 r1 (OFF/2/95)</td><td>OFF/2/95</td><td>2</td><td>5</td><td>18</td><td>0</td><td>0</td><td>38</td><td>DONE</td><td><a href="sweep_grids\cfgR5-01_run1.html">grid</a></td></tr>
+<tr><td>cfgR5-01 r2 (OFF/2/95)</td><td>OFF/2/95</td><td>1</td><td>6</td><td>18</td><td>0</td><td>0</td><td>39</td><td>DONE</td><td><a href="sweep_grids\cfgR5-01_run2.html">grid</a></td></tr>
+<tr><td>cfgR5-01 r3 (OFF/2/95)</td><td>OFF/2/95</td><td>0</td><td>8</td><td>17</td><td>0</td><td>0</td><td>40</td><td>DONE</td><td><a href="sweep_grids\cfgR5-01_run3.html">grid</a></td></tr>
+<tr><td>cfgR5-01 r4 (OFF/2/95)</td><td>OFF/2/95</td><td>1</td><td>8</td><td>16</td><td>0</td><td>0</td><td>41</td><td>DONE</td><td><a href="sweep_grids\cfgR5-01_run4.html">grid</a></td></tr>
+<tr><td>cfgR5-01 r5 (OFF/2/95)</td><td>OFF/2/95</td><td>3</td><td>2</td><td>20</td><td>0</td><td>0</td><td>42</td><td>DONE</td><td><a href="sweep_grids\cfgR5-01_run5.html">grid</a></td></tr>
+</table>
 <div class="abbrkey">
 <strong>Abbreviations.</strong>
 ICU = ICU &middot; VA = VA Inpatient &middot; BMC = Broadlawns &middot; Y7D = Younker 7 Days &middot;
@@ -909,12 +3136,13 @@ AMB GI = Outpatient GI &middot; AMB P = Outpatient Pulm &middot; ER = Emergency 
 ADDMED = Addiction Medicine &middot; Elec = Elective.
 </div>
 
-
 <div class="footnote">
 Prepared from the project's iteration analysis. Schedule snapshots for each version are
 archived for reproducibility. "Saturday gaps" (4) are fixed by arithmetic &mdash; 11 interns
 covering 26 half-blocks of Younker&nbsp;8 Pulmonology leaves exactly 4 uncovered &mdash; and
 are identical across every possible schedule, so they are not a point of difference.
+v7 grid not shown as a separate snapshot (predates the versioning system; v7 was the live
+schedule at the time). v9 grid not recoverable (database index corruption after that save).
 </div>
 
 </body>

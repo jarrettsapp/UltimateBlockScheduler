@@ -12,7 +12,7 @@ import java.util.*;
  * <p>Inputs are deliberately simple so this works on both the live schedule and a saved
  * version snapshot: a per-group grid of {@code residentKey -> slotIndex -> rotationName},
  * where slots are the 26 two-week half-blocks (0..25). Rotation tier membership follows the
- * program's authoritative workload tiers (see SCHEDULING_RULES.md), NOT the unreliable
+ * program's authoritative workload tiers (see RULES.md §7), NOT the unreliable
  * {@code rotation_type} flag.
  */
 public final class ScheduleMetrics {

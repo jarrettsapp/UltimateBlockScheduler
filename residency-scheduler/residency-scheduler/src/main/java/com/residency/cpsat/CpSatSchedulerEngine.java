@@ -137,10 +137,14 @@ public class CpSatSchedulerEngine {
     private final ScheduleConfigDAO      configDAO;
     private final RotationLinkRuleDAO    linkRuleDAO;
     private final AuxFillerRotationDAO   auxFillerRotationDAO;
+    private final Phase0SeedStatsDAO     seedStatsDAO;
 
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile CpSolver activeSolver;
     private volatile ScheduleSolution bestSolution;
+    // Seed ID this run warm-started from (PHASE0_FIX=cache replay), for outcome recording at the
+    // end of a full 4-phase run; null when not a cache-replay run. See SEED_POOL_TRACKING_PLAN.md.
+    private String runSeedId;
 
     public CpSatSchedulerEngine() throws SQLException {
         residentDAO          = new ResidentDAO();
@@ -151,6 +155,7 @@ public class CpSatSchedulerEngine {
         configDAO            = new ScheduleConfigDAO();
         linkRuleDAO          = new RotationLinkRuleDAO();
         auxFillerRotationDAO = new AuxFillerRotationDAO();
+        seedStatsDAO         = new Phase0SeedStatsDAO();
     }
 
     /**
@@ -503,6 +508,7 @@ public class CpSatSchedulerEngine {
             throws SQLException {
         ensureNativeLibraries();
         stopRequested.set(false);
+        runSeedId = null;   // set later iff this run warm-starts from a cached seed
         long startMs = System.currentTimeMillis();
 
         // ── 1. Load data ───────────────────────────────────────────────────
@@ -662,20 +668,123 @@ public class CpSatSchedulerEngine {
                 }
             }
 
+            // ── Phase-0 FIX options (post-decomp investigation; PHASE0_FIX=…) ──────────
+            // These attack the COLD first-feasibility search directly instead of decomposing
+            // the problem (which dead-ended — window 1 is the full problem). All env-gated
+            // OFF; unset → the plain solve below, untouched. Modes:
+            //   cache       — Option 1: replay a DB-cached known-FEASIBLE assignment as hints
+            //                 (repairHint). The model is identical every run, so a feasible
+            //                 point found once is feasible forever. Highest-probability win.
+            //   fjportfolio — Option 2: stack the worker portfolio toward feasibility_jump
+            //                 (the only subsolver that ever finds feasibility on this model).
+            //   multiseed   — Option 3: short fresh-random-seed attempts back-to-back, stop on
+            //                 the first feasible draw (more lottery tickets per wall budget).
+            //   lns         — Option 4: hard-fix the bulk of a cached/greedy assignment and let
+            //                 CP-SAT repair only the free remainder (single-shot LNS, never the
+            //                 cold-window-1 trap).
+            //   presolveN   — Option 5: bound presolve (setMaxPresolveIterations / disable) so
+            //                 search (where feasibility_jump lives) starts immediately.
+            // See PHASE0_DECOMPOSITION_PLAN.md "post-decomp FIX options".
+            String p0fix = System.getenv().getOrDefault("PHASE0_FIX", "").trim();
+            boolean p0fixDiag = "1".equals(System.getenv("PHASE0_DIAG"));
+
+            // PHASE0_CACHE_COLLECT=1 = pool-SEEDING mode: solve COLD (no replay) so each run
+            // explores freshly and the pool accumulates genuine variety, persisting every new
+            // distinct find. Used by phase0_seed_pool.sh to build the pool up front; OFF for
+            // normal cache runs (which replay a random cached assignment as a warm start).
+            boolean cacheCollect = "1".equals(System.getenv("PHASE0_CACHE_COLLECT"));
+
+            if (p0fix.equals("cache")) {
+                if (cacheCollect) {
+                    onProgress.accept("Phase 0 ▶ cache COLLECT — cold solve (no replay); persisting new finds for pool variety.");
+                    solverLog.append("Phase 0 FIX=cache (COLLECT): cold solve, will append if distinct.\n");
+                } else {
+                    // Integrity guard: if the model changed since the pool was built, revalidate
+                    // every entry against the CURRENT model and evict any that no longer solve.
+                    ensurePoolFreshOrEvict(year, residents, rotations, config, reqMap, prereqMap,
+                        eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage, solverLog);
+                    // Option 1: warm-start from a RANDOM cached feasible assignment if present, so
+                    // consecutive runs start from different feasible basins (no single-basin bias).
+                    Map<String, Long> cached = loadCachedFeasibleHints(year);
+                    if (cached != null && !cached.isEmpty()) {
+                        runSeedId = seedId(cached);   // remember which seed we started from (outcome recording)
+                        applyHints(mc0.model(), mc0.varFactory(), residents, rotations, totalBlocks, cached);
+                        onProgress.accept(String.format(
+                            "Phase 0 ▶ cache hit — warm-starting from cached seed %s… (%d vars, repairHint).",
+                            runSeedId.substring(0, 8), cached.size()));
+                        solverLog.append(String.format("Phase 0 FIX=cache: replayed seed %s (%d vars).\n",
+                            runSeedId.substring(0, 8), cached.size()));
+                    } else {
+                        onProgress.accept("Phase 0 ▶ cache MISS — cold solve; will persist the result if feasible.");
+                        solverLog.append("Phase 0 FIX=cache: empty pool — cold solve, will cache on success.\n");
+                    }
+                }
+            } else if (p0fix.equals("lns")) {
+                // Option 4: hard-fix the bulk of a cached/greedy assignment, leave a free margin
+                // for CP-SAT to repair. Single-shot — never a cold staged window.
+                applyLnsCore(mc0.model(), mc0.varFactory(), residents, rotations, config,
+                    rotationLengths, eligibleByRotation, totalBlocks, year, onProgress, solverLog);
+            }
+
+            // Build the solver. fjportfolio / multiseed / presolveN tune it; cache & lns reuse
+            // the standard configureSolver (Option C tuning still available via PHASE0_MODE=C).
             solver0 = useC
                 ? configureSolverPhase0(config, tier0LimitSec)
                 : configureSolver(config, tier0LimitSec);
+            if (p0fix.startsWith("presolve")) {
+                applyPresolveBound(solver0, p0fix, solverLog); // Option 5
+            }
+            // The feasibility_jump portfolio (Option 2) is also a COMPOSABLE knob: either the
+            // standalone mode PHASE0_FIX=fjportfolio, OR stacked on any other FIX mode via
+            // PHASE0_PORTFOLIO=fj. The latter lets pool-SEEDING (PHASE0_FIX=cache + COLLECT)
+            // find each feasible point ~10× faster, and lets cache-replay runs combine the two
+            // strongest levers (warm start + feasibility-jump-heavy search).
+            boolean wantFjPortfolio = p0fix.equals("fjportfolio")
+                || "fj".equalsIgnoreCase(System.getenv().getOrDefault("PHASE0_PORTFOLIO", "").trim());
+            if (wantFjPortfolio) {
+                applyFeasibilityJumpPortfolio(solver0, solverLog); // Option 2
+            }
+            // Phase-0 only needs a feasible incumbent: stop at the first solution for all FIX
+            // modes (configureSolverPhase0 already does this; configureSolver does not).
+            if (!p0fix.isEmpty() && !useC)
+                solver0.getParameters().setStopAfterFirstSolution(true);
+
+            // Pool-seeding: randomize the seed each collect run so cold solves land in
+            // different feasible basins (genuine pool variety, not the same point repeatedly).
+            if (p0fix.equals("cache") && cacheCollect)
+                solver0.getParameters().setRandomSeed(new Random().nextInt(Integer.MAX_VALUE));
+
             // PHASE0_DIAG=1 turns on CP-SAT's search-progress log so we can see the per-step
             // presolve timing (probing / BVE / iterations) and find what eats the budget on
             // capped draws. Applies on top of whatever mode is selected; output goes to stdout
             // (the run log). Diagnostic only — leave off for normal runs.
-            if ("1".equals(System.getenv("PHASE0_DIAG"))) {
+            if (p0fixDiag) {
                 solver0.getParameters().setLogSearchProgress(true);
                 solver0.getParameters().setLogToStdout(true);
             }
             activeSolver = solver0;
-            status0 = solver0.solve(mc0.model());
+
+            if (p0fix.equals("multiseed")) {
+                // Option 3: short fresh-seed attempts back-to-back; stop on first feasible.
+                status0 = solveMultiSeed(solver0, mc0, tier0LimitSec, onProgress, solverLog, startMs);
+            } else {
+                status0 = solver0.solve(mc0.model());
+            }
             activeSolver = null;
+
+            // Option 1: persist the FIRST feasible Phase-0 assignment so later runs warm-start.
+            if (p0fix.equals("cache")
+                    && (status0 == CpSolverStatus.FEASIBLE || status0 == CpSolverStatus.OPTIMAL)) {
+                Map<String, Long> found =
+                    extractHints(solver0, mc0.varFactory(), residents, rotations, totalBlocks);
+                // Stamp the pool with the current model fingerprint so a later model change is
+                // detectable (triggers revalidation on the next replay run).
+                String fp = computeModelFingerprint(residents, rotations, reqMap,
+                    eligibleByRotation, rotationLengths, seqMap, totalBlocks, config);
+                try { configDAO.saveRawValue(CACHE_FP_PREFIX + year, fp); }
+                catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "fingerprint save failed", e); }
+                saveCachedFeasibleHints(year, found, solverLog);
+            }
         }
         solverLog.append(String.format("\nPhase 0 result: %s  (%.1fs)%s\n",
             status0, (System.currentTimeMillis() - startMs) / 1000.0,
@@ -898,6 +1007,23 @@ public class CpSatSchedulerEngine {
             (int) -solution.getObjectiveValue(),
             solution.getRuntimeMs(), solution.isFeasible(),
             solution.statusSummary());
+
+        // Per-seed outcome recording: if this full run warm-started from a cached seed and
+        // produced a feasible schedule, record its final Tier scores against that seed (reward
+        // data for the deferred exploit/prune policies). Best-effort; never breaks a solve.
+        if (runSeedId != null && solution.isFeasible()) {
+            try {
+                int t1 = bestTier1 < Integer.MAX_VALUE ? bestTier1 : 0;
+                int t2 = bestTier2 < Long.MAX_VALUE ? (int) bestTier2 : 0;
+                int t3 = (int) Math.max(0, -solution.getObjectiveValue()); // Phase-3 objective proxy
+                seedStatsDAO.recordOutcome(runSeedId, t1, t2, t3);
+                solverLog.append(String.format(
+                    "Seed %s outcome recorded: Tier1=%d Tier2=%d Tier3=%d.\n",
+                    runSeedId.substring(0, 8), t1, t2, t3));
+            } catch (SQLException e) {
+                LOG.log(java.util.logging.Level.WARNING, "seed outcome record failed", e);
+            }
+        }
 
         activeSolver = null;
         bestSolution = solution;
@@ -1237,6 +1363,539 @@ public class CpSatSchedulerEngine {
                     if (v != null) model.addHint(sv, v);
                 });
             }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Phase-0 FIX options (post-decomp investigation; env-gated via PHASE0_FIX)
+    //  Each attacks the COLD first-feasibility search directly rather than
+    //  decomposing the (globally-coupled, order-free) problem, which dead-ended.
+    // ══════════════════════════════════════════════════════════════════════
+
+    // --- Option 1: cache & replay feasible assignment(s) ---------------------
+    // The Phase-0 model is byte-identical every run, so any feasible assignment
+    // found once stays feasible forever. We persist a POOL of distinct feasible
+    // assignments (not just one) under schedule_config and replay a RANDOM one
+    // as warm-start hints each run, so Phase 1 is not perpetually biased toward a
+    // single starting basin. The pool grows: each cold solve that finds a NEW
+    // (not-yet-cached) assignment appends it, up to PHASE0_CACHE_POOL_MAX.
+
+    private static final String CACHE_KEY_PREFIX = "phase0_feasible_pool_";
+    private static final String CACHE_REC_SEP = "␞";   // record separator between pooled assignments
+    private static final int CACHE_POOL_MAX_DEFAULT = 25;
+
+    private int cachePoolMax() {
+        try { return Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PHASE0_CACHE_POOL_MAX", ""))); }
+        catch (NumberFormatException e) { return CACHE_POOL_MAX_DEFAULT; }
+    }
+
+    /** Loads the cached feasible-assignment pool for {@code year} (may be empty). */
+    private List<Map<String, Long>> loadCachedFeasiblePool(int year) {
+        try {
+            String blob = configDAO.loadRawValue(CACHE_KEY_PREFIX + year);
+            if (blob == null || blob.isBlank()) return new ArrayList<>();
+            List<Map<String, Long>> pool = new ArrayList<>();
+            for (String rec : blob.split(CACHE_REC_SEP)) {
+                if (!rec.isBlank()) pool.add(deserializeHints(rec));
+            }
+            return pool;
+        } catch (SQLException e) {
+            LOG.log(java.util.logging.Level.WARNING, "Phase-0 cache load failed", e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Returns ONE assignment from the cached pool to warm-start this run. Selection mode via
+     * env {@code PHASE0_SEED_SELECT}:
+     * <ul>
+     *   <li><b>random</b> (default) — uniform random draw; different basin each run.</li>
+     *   <li><b>roundrobin</b> — coverage-first: pick the least-used / least-recently-used seed
+     *       (per phase0_seed_stats), so every seed is consumed before any repeat. Marks the
+     *       chosen seed used. Backfills any untracked pooled seed first so existing pools work.</li>
+     * </ul>
+     * Null if the pool is empty. Both modes return the SAME assignment objects — only the
+     * choice policy differs.
+     */
+    private Map<String, Long> loadCachedFeasibleHints(int year) {
+        List<Map<String, Long>> pool = loadCachedFeasiblePool(year);
+        if (pool.isEmpty()) return null;
+        String mode = System.getenv().getOrDefault("PHASE0_SEED_SELECT", "random").trim().toLowerCase();
+        if (mode.equals("roundrobin")) {
+            try {
+                // Backfill: ensure every pooled seed is tracked (registers IDs for pools built
+                // before tracking existed), then pick the least-used and mark it used.
+                Map<String, Map<String, Long>> byId = new HashMap<>();
+                for (Map<String, Long> a : pool) {
+                    String id = seedId(a);
+                    byId.put(id, a);
+                    seedStatsDAO.ensureSeed(id, year);
+                }
+                String pick = seedStatsDAO.pickRoundRobin(year);
+                if (pick != null && byId.containsKey(pick)) {
+                    seedStatsDAO.markUsed(pick);
+                    return byId.get(pick);
+                }
+            } catch (SQLException e) {
+                LOG.log(java.util.logging.Level.WARNING, "round-robin seed select failed — falling back to random", e);
+            }
+            // fall through to random on any issue
+        }
+        return pool.get(new Random().nextInt(pool.size()));
+    }
+
+    /**
+     * Appends {@code found} to the cached pool IFF it is distinct from every assignment
+     * already cached (so the pool accumulates genuine variety, not duplicates), capped
+     * at {@link #cachePoolMax()}. Keying by occupancy fingerprint keeps the comparison
+     * cheap and order-independent.
+     */
+    private void saveCachedFeasibleHints(int year, Map<String, Long> found, StringBuilder solverLog) {
+        if (found == null || found.isEmpty()) return;
+        try {
+            List<Map<String, Long>> pool = loadCachedFeasiblePool(year);
+            String fp = fingerprint(found);
+            for (Map<String, Long> existing : pool) {
+                if (fingerprint(existing).equals(fp)) {
+                    solverLog.append(String.format(
+                        "Phase 0 FIX=cache: assignment already in pool (%d cached) — not re-adding.\n", pool.size()));
+                    return; // already have this one
+                }
+            }
+            if (pool.size() >= cachePoolMax()) {
+                solverLog.append(String.format(
+                    "Phase 0 FIX=cache: pool full (%d/%d) — keeping existing variety, not adding.\n",
+                    pool.size(), cachePoolMax()));
+                return;
+            }
+            pool.add(found);
+            StringBuilder blob = new StringBuilder();
+            for (int i = 0; i < pool.size(); i++) {
+                if (i > 0) blob.append(CACHE_REC_SEP);
+                blob.append(serializeHints(pool.get(i)));
+            }
+            configDAO.saveRawValue(CACHE_KEY_PREFIX + year, blob.toString());
+            // Register the new seed for per-seed tracking (coverage-first selection + reward
+            // accumulation). Keyed by content hash so it's stable + dedup-consistent.
+            try { seedStatsDAO.ensureSeed(seedId(found), year); }
+            catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "seed-stats register failed", e); }
+            solverLog.append(String.format(
+                "Phase 0 FIX=cache: cached new feasible assignment (pool now %d/%d).\n",
+                pool.size(), cachePoolMax()));
+        } catch (SQLException e) {
+            LOG.log(java.util.logging.Level.WARNING, "Phase-0 cache save failed", e);
+        }
+    }
+
+    /** Order-independent fingerprint of the SET vars (occupancy = 1) in an assignment. */
+    private static String fingerprint(Map<String, Long> hints) {
+        return hints.entrySet().stream()
+            .filter(e -> e.getValue() != null && e.getValue() != 0L)
+            .map(Map.Entry::getKey).sorted().collect(Collectors.joining(","));
+    }
+
+    /**
+     * Stable, content-based seed ID = SHA-256(fingerprint). Hex (64 chars), collision-free in
+     * practice, scales to thousands+ of seeds with no reuse. Same schedule → same ID (dedup-
+     * consistent). Used as the {@code seed_id} key in phase0_seed_stats.
+     */
+    private static String seedId(Map<String, Long> assignment) {
+        String fp = fingerprint(assignment);
+        try {
+            byte[] h = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(fp.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : h) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return Integer.toHexString(fp.hashCode());
+        }
+    }
+
+    /** Serialize as "name=val;name=val;…". Var names contain no ';' or '='-value chars. */
+    private static String serializeHints(Map<String, Long> hints) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Long> e : hints.entrySet()) {
+            if (sb.length() > 0) sb.append(';');
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    private static Map<String, Long> deserializeHints(String s) {
+        Map<String, Long> m = new HashMap<>();
+        for (String tok : s.split(";")) {
+            int eq = tok.lastIndexOf('=');
+            if (eq > 0) {
+                try { m.put(tok.substring(0, eq), Long.parseLong(tok.substring(eq + 1))); }
+                catch (NumberFormatException ignore) { /* skip malformed token */ }
+            }
+        }
+        return m;
+    }
+
+    // --- Cache integrity: model fingerprint + feasibility re-validation ------
+    // The pool is feasible for the model that PRODUCED it. If the model later changes
+    // (a rule/cap/requirement edited in the DB), pooled entries may become stale, and
+    // because replay uses addHint+repairHint (NOT hard fixes) a stale entry would be
+    // silently repaired rather than rejected. We guard against that two ways:
+    //   (1) MODEL FINGERPRINT — a hash of every structural input to buildBaseModel,
+    //       stored alongside the pool. On mismatch we know the model changed.
+    //   (2) RE-VALIDATION — hard-addEquality each pooled assignment into a FRESH model
+    //       and solve; FEASIBLE = genuinely valid against the CURRENT model, INFEASIBLE =
+    //       stale → evict. This is a proof, not a heuristic (CP-SAT FEASIBLE is a proof).
+
+    private static final String CACHE_FP_PREFIX = "phase0_feasible_pool_fp_";
+
+    /**
+     * SHA-256 over every input that determines the Phase-0 model's feasibility:
+     * residents (id+pgy), rotations (id), per-resident requirements, eligibility,
+     * rotation lengths, sequence rules, totalBlocks, and the feasibility-relevant
+     * config fields. Order-stable (sorted) so identical models always hash identically.
+     */
+    private String computeModelFingerprint(List<Resident> residents, List<Rotation> rotations,
+            Map<Integer, Map<Integer, RotationRequirement>> reqMap,
+            Map<Integer, Set<Integer>> eligibleByRotation,
+            Map<Integer, int[]> rotationLengths,
+            Map<Integer, List<RotationSequenceRule>> seqMap,
+            int totalBlocks, ScheduleConfig config) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("blocks=").append(totalBlocks).append('|');
+        residents.stream().sorted(Comparator.comparingInt(Resident::getId)).forEach(r ->
+            sb.append("R").append(r.getId()).append(':').append(r.getPgyLevel()).append(','));
+        rotations.stream().sorted(Comparator.comparingInt(Rotation::getId)).forEach(s ->
+            sb.append("S").append(s.getId()).append(','));
+        new TreeMap<>(rotationLengths).forEach((rid, len) ->
+            sb.append("L").append(rid).append('=').append(Arrays.toString(len)).append(','));
+        new TreeMap<>(eligibleByRotation).forEach((sid, set) ->
+            sb.append("E").append(sid).append('=').append(new TreeSet<>(set)).append(','));
+        // requirements: resident → rotation → (min,max-ish summary via toString)
+        new TreeMap<>(reqMap).forEach((rid, m) -> {
+            sb.append("Q").append(rid).append('{');
+            new TreeMap<>(m).forEach((sid, req) -> sb.append(sid).append(':').append(req).append(','));
+            sb.append('}');
+        });
+        new TreeMap<>(seqMap).forEach((sid, rules) ->
+            sb.append("SEQ").append(sid).append('=').append(rules).append(','));
+        // Config fields that affect HARD feasibility (weights/soft terms excluded on purpose).
+        sb.append("CFG:")
+          .append(config.getGlobalMinWorkloadBlocks()).append('/')
+          .append(config.getGlobalMaxWorkloadBlocks()).append('/')
+          .append(config.isEnforceZeroVolunteerWeekends()).append('/')
+          .append(config.isMaxConsecHeavyMediumHard()).append('/')
+          .append(config.getMaxConsecutiveHeavyMediumWeeks()).append('/')
+          .append(new TreeSet<>(config.getHeavyRotationIds()));
+        try {
+            byte[] h = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : h) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return Integer.toHexString(sb.toString().hashCode()); // fallback
+        }
+    }
+
+    /**
+     * Confirms ONE pooled assignment is feasible against the CURRENT model by hard-fixing
+     * it into a fresh model and solving (stop-after-first; a feasible completion = valid).
+     * Returns true iff FEASIBLE/OPTIMAL.
+     */
+    private boolean revalidateAssignment(Map<String, Long> assignment,
+            List<Resident> residents, List<Rotation> rotations, ScheduleConfig config,
+            Map<Integer, Map<Integer, RotationRequirement>> reqMap,
+            Map<Integer, List<Prerequisite>> prereqMap,
+            Map<Integer, Set<Integer>> eligibleByRotation,
+            Map<Integer, int[]> rotationLengths,
+            Map<Integer, List<RotationSequenceRule>> seqMap,
+            int totalBlocks, Map<Integer, Map<Integer, Integer>> auxCoverage) {
+        ModelContext mc = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
+            eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+        // Hard-fix EVERY slot to the cached value (frozenSlots = all blocks).
+        Set<Integer> allSlots = new HashSet<>();
+        for (int b = 0; b < totalBlocks; b++) allSlots.add(b);
+        fixFrozenSlots(mc.model(), mc.varFactory(), residents, rotations, totalBlocks,
+            rotationLengths, assignment, allSlots);
+        CpSolver solver = configureSolver(config, 30);
+        solver.getParameters().setStopAfterFirstSolution(true);
+        CpSolverStatus st = solver.solve(mc.model());
+        return st == CpSolverStatus.FEASIBLE || st == CpSolverStatus.OPTIMAL;
+    }
+
+    /**
+     * Before replaying from the pool: if the stored model fingerprint differs from the
+     * current model's (or is missing), revalidate every pooled assignment against the
+     * current model and EVICT any that no longer solve, then re-stamp the fingerprint.
+     * No-op (fast path) when the fingerprint matches — the common case. This is what makes
+     * the cache safe to keep across model edits.
+     */
+    private void ensurePoolFreshOrEvict(int year,
+            List<Resident> residents, List<Rotation> rotations, ScheduleConfig config,
+            Map<Integer, Map<Integer, RotationRequirement>> reqMap,
+            Map<Integer, List<Prerequisite>> prereqMap,
+            Map<Integer, Set<Integer>> eligibleByRotation,
+            Map<Integer, int[]> rotationLengths,
+            Map<Integer, List<RotationSequenceRule>> seqMap,
+            int totalBlocks, Map<Integer, Map<Integer, Integer>> auxCoverage,
+            StringBuilder solverLog) {
+        try {
+            String current = computeModelFingerprint(residents, rotations, reqMap,
+                eligibleByRotation, rotationLengths, seqMap, totalBlocks, config);
+            String stored = configDAO.loadRawValue(CACHE_FP_PREFIX + year);
+            if (current.equals(stored)) return; // model unchanged — fast path, no revalidation
+            List<Map<String, Long>> pool = loadCachedFeasiblePool(year);
+            if (pool.isEmpty()) { configDAO.saveRawValue(CACHE_FP_PREFIX + year, current); return; }
+            solverLog.append(String.format(
+                "Phase 0 FIX=cache: MODEL CHANGED (fingerprint mismatch) — revalidating %d pooled entries…\n", pool.size()));
+            List<Map<String, Long>> kept = new ArrayList<>();
+            int evicted = 0;
+            for (Map<String, Long> a : pool) {
+                if (revalidateAssignment(a, residents, rotations, config, reqMap, prereqMap,
+                        eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage))
+                    kept.add(a);
+                else evicted++;
+            }
+            // Persist the cleaned pool + the new fingerprint.
+            StringBuilder blob = new StringBuilder();
+            for (int i = 0; i < kept.size(); i++) {
+                if (i > 0) blob.append(CACHE_REC_SEP);
+                blob.append(serializeHints(kept.get(i)));
+            }
+            configDAO.saveRawValue(CACHE_KEY_PREFIX + year, blob.toString());
+            configDAO.saveRawValue(CACHE_FP_PREFIX + year, current);
+            solverLog.append(String.format(
+                "Phase 0 FIX=cache: revalidation done — kept %d, evicted %d stale entries.\n",
+                kept.size(), evicted));
+        } catch (SQLException e) {
+            LOG.log(java.util.logging.Level.WARNING, "Pool revalidation failed", e);
+        }
+    }
+
+    /**
+     * Standalone pool audit (called by the PoolAudit tool): (1) re-validates every pooled
+     * assignment against the current model and reports feasible/stale counts, optionally
+     * evicting stale ones; (2) reports the pairwise Hamming-distance distribution as a
+     * read-only DIVERSITY measure (min/median/max placements differing between pool entries).
+     * Returns a human-readable report.
+     */
+    public String auditPool(int year, boolean evictStale) throws SQLException {
+        ensureNativeLibraries();
+        // Rebuild the same model inputs solve() builds (same DAO calls + map builders).
+        ScheduleConfig config = configDAO.loadConfig();
+        List<Resident> residents = residentDAO.getMainResidents();
+        List<Resident> auxResidents = residentDAO.getAuxiliaryResidents();
+        List<Rotation> rotations = rotationDAO.getAll();
+        applyTierDefaults(config, rotations);
+        int totalBlocks = ScheduleUnits.SLOTS_PER_YEAR;
+        config.setTotalBlocks(totalBlocks);
+
+        Map<Integer, int[]> rotationLengths = new HashMap<>();
+        for (Rotation r : rotations) {
+            ScheduleConfig.RotationPolicy policy = configDAO.loadRotationPolicy(r.getId());
+            config.getRotationPolicies().put(r.getId(), policy);
+            rotationLengths.put(r.getId(), policy.allowedBlockLengths);
+        }
+        Map<Integer, Map<Integer, RotationRequirement>> reqMap = buildReqMap(rulesDAO.getAllRequirements());
+        Map<Integer, Set<Integer>> eligibleByRotation = buildEligibilityMap(residents, rotations, reqMap);
+        Map<Integer, List<Prerequisite>> prereqMap = buildPrereqMap(rulesDAO.getAllPrerequisites());
+        Map<Integer, List<RotationSequenceRule>> seqMap = buildSequenceRuleMap(rulesDAO.getAllSequenceRules());
+        config.setRotationLinkRules(linkRuleDAO.getAll());
+
+        List<Integer> auxIds = auxResidents.stream().map(Resident::getId).collect(Collectors.toList());
+        Map<String, Set<Integer>> fillerRotationsByGroup = auxFillerRotationDAO.getAllFillerRotations();
+        Set<String> fillerExclusions = buildFillerExclusions(auxResidents, fillerRotationsByGroup);
+        Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
+            ? new HashMap<>()
+            : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+
+        List<Map<String, Long>> pool = loadCachedFeasiblePool(year);
+        StringBuilder rpt = new StringBuilder();
+        rpt.append(String.format("=== Phase-0 pool audit (year=%d) ===%n", year));
+        rpt.append(String.format("pool size: %d%n", pool.size()));
+        if (pool.isEmpty()) return rpt.append("(empty pool — nothing to audit)\n").toString();
+
+        // (1) Feasibility re-validation.
+        List<Map<String, Long>> feasible = new ArrayList<>();
+        int stale = 0;
+        for (int i = 0; i < pool.size(); i++) {
+            boolean ok = revalidateAssignment(pool.get(i), residents, rotations, config,
+                reqMap, prereqMap, eligibleByRotation, rotationLengths, seqMap,
+                totalBlocks, auxCoverage);
+            rpt.append(String.format("  entry %2d: %s%n", i, ok ? "FEASIBLE" : "STALE (infeasible now)"));
+            if (ok) feasible.add(pool.get(i)); else stale++;
+        }
+        rpt.append(String.format("feasible: %d   stale: %d%n", feasible.size(), stale));
+
+        // (2) Diversity: pairwise Hamming distance over occupancy fingerprints.
+        List<String> fps = new ArrayList<>();
+        for (Map<String, Long> a : pool) fps.add(fingerprint(a));
+        List<Integer> dists = new ArrayList<>();
+        for (int i = 0; i < pool.size(); i++)
+            for (int j = i + 1; j < pool.size(); j++)
+                dists.add(hammingPlacements(pool.get(i), pool.get(j)));
+        if (!dists.isEmpty()) {
+            Collections.sort(dists);
+            int min = dists.get(0), max = dists.get(dists.size() - 1);
+            int med = dists.get(dists.size() / 2);
+            long dupPairs = dists.stream().filter(d -> d == 0).count();
+            rpt.append(String.format(
+                "diversity (pairwise placements differing): min=%d  median=%d  max=%d  (%d identical pairs)%n",
+                min, med, max, dupPairs));
+        }
+
+        if (evictStale && stale > 0) {
+            StringBuilder blob = new StringBuilder();
+            for (int i = 0; i < feasible.size(); i++) {
+                if (i > 0) blob.append(CACHE_REC_SEP);
+                blob.append(serializeHints(feasible.get(i)));
+            }
+            configDAO.saveRawValue(CACHE_KEY_PREFIX + year, blob.toString());
+            configDAO.saveRawValue(CACHE_FP_PREFIX + year,
+                computeModelFingerprint(residents, rotations, reqMap, eligibleByRotation,
+                    rotationLengths, seqMap, totalBlocks, config));
+            rpt.append(String.format("evicted %d stale entries; pool now %d.%n", stale, feasible.size()));
+        }
+        return rpt.toString();
+    }
+
+    /** Count of (resident,rotation,block) placements present in exactly one of two assignments. */
+    private static int hammingPlacements(Map<String, Long> a, Map<String, Long> b) {
+        Set<String> sa = a.entrySet().stream().filter(e -> e.getValue() != null && e.getValue() != 0L)
+            .map(Map.Entry::getKey).collect(Collectors.toSet());
+        Set<String> sb = b.entrySet().stream().filter(e -> e.getValue() != null && e.getValue() != 0L)
+            .map(Map.Entry::getKey).collect(Collectors.toSet());
+        Set<String> union = new HashSet<>(sa); union.addAll(sb);
+        Set<String> inter = new HashSet<>(sa); inter.retainAll(sb);
+        return union.size() - inter.size(); // symmetric difference size
+    }
+
+    // --- Option 2: feasibility_jump-heavy portfolio --------------------------
+    /**
+     * Steers the CP-SAT worker portfolio toward {@code feasibility_jump} — the ONLY
+     * subsolver observed to reach feasibility on this model (the 7 LP/optimization
+     * workers never do). Instead of ~2 feasibility finders out of the default 10, run
+     * the workers as feasibility-jump variants, multiplying independent feasibility
+     * attempts per run. Param names differ across OR-Tools builds; set defensively and
+     * log what took. Reversible (env-gated; default path never calls this).
+     */
+    private void applyFeasibilityJumpPortfolio(CpSolver solver, StringBuilder solverLog) {
+        var p = solver.getParameters();
+        // Naming subsolvers explicitly (clear_subsolvers / extra_subsolvers with literal
+        // "fj_*" names) is rejected by CP-SAT 9.9 as MODEL_INVALID on this model — the exact
+        // internal names aren't stable across builds. So bias toward feasibility WITHOUT
+        // naming any subsolver: (a) turn feasibility_jump explicitly on (boolean — always
+        // valid), (b) raise the worker count so the default portfolio runs MORE
+        // feasibility-jump instances with distinct seeds, (c) feasibility-favoring search
+        // params (probing off, polarity false). All plain scalars → never invalidates the model.
+        int workers = Math.max(p.getNumWorkers(), 16);
+        p.setNumWorkers(workers);
+        p.setUseFeasibilityJump(true);
+        p.setCpModelProbingLevel(0);
+        p.setInitialPolarity(com.google.ortools.sat.SatParameters.Polarity.POLARITY_FALSE);
+        solverLog.append(String.format(
+            "Phase 0 FIX=fjportfolio: workers=%d, feasibility_jump on, probing off, polarity false.\n", workers));
+    }
+
+    // --- Option 3: multi-seed restart sequence -------------------------------
+    /**
+     * Runs short fresh-random-seed attempts back-to-back, stopping on the FIRST feasible
+     * draw. Success on this model is essentially a draw of the portfolio, so K independent
+     * attempts inside the same wall budget give K shots instead of one long one. Returns
+     * the first FEASIBLE/OPTIMAL status, or the last status if none succeed.
+     */
+    private CpSolverStatus solveMultiSeed(CpSolver solver, ModelContext mc, int totalLimitSec,
+            Consumer<String> onProgress, StringBuilder solverLog, long startMs) {
+        int attempts = 4;
+        try { attempts = Math.max(1, Integer.parseInt(System.getenv().getOrDefault("PHASE0_MULTISEED_TRIES", ""))); }
+        catch (NumberFormatException ignore) { /* default 4 */ }
+        int perTry = totalLimitSec > 0 ? Math.max(15, totalLimitSec / attempts) : 0;
+        CpSolverStatus status = CpSolverStatus.UNKNOWN;
+        for (int k = 0; k < attempts; k++) {
+            if (stopRequested.get()) break;
+            // Clamp the final attempt to whatever wall budget remains.
+            if (totalLimitSec > 0) {
+                int elapsed = (int) ((System.currentTimeMillis() - startMs) / 1000);
+                int remaining = totalLimitSec - elapsed;
+                if (remaining <= 0) break;
+                solver.getParameters().setMaxTimeInSeconds(Math.min(perTry, remaining));
+            }
+            solver.getParameters().setRandomSeed(1 + k * 7919); // distinct, deterministic seeds
+            onProgress.accept(String.format("Phase 0 ▶ multiseed attempt %d/%d (seed=%d, ≤%ds)…",
+                k + 1, attempts, 1 + k * 7919, perTry));
+            status = solver.solve(mc.model());
+            solverLog.append(String.format("  multiseed attempt %d/%d → %s  (%.1fs total)\n",
+                k + 1, attempts, status, (System.currentTimeMillis() - startMs) / 1000.0));
+            if (status == CpSolverStatus.FEASIBLE || status == CpSolverStatus.OPTIMAL
+                    || status == CpSolverStatus.INFEASIBLE)
+                break; // feasible → done; infeasible → model is infeasible, no seed will help
+        }
+        return status;
+    }
+
+    // --- Option 4: LNS fix-and-relax repair around a core --------------------
+    /**
+     * Hard-fixes the bulk of a cached (or greedy) assignment and leaves a free margin for
+     * CP-SAT to repair in a single shot — a large-neighborhood search, NOT a staged window,
+     * so it never hits the cold-window-1 trap that killed decomposition. Frees a random
+     * subset of slots (default ~30%) so the repair region is non-trivial but small. If no
+     * cached assignment exists, falls back to a greedy seed core.
+     */
+    private void applyLnsCore(CpModel model, VariableFactory varFactory,
+            List<Resident> residents, List<Rotation> rotations, ScheduleConfig config,
+            Map<Integer, int[]> rotationLengths, Map<Integer, Set<Integer>> eligibleByRotation,
+            int totalBlocks, int year, Consumer<String> onProgress, StringBuilder solverLog) {
+        Map<String, Long> core = loadCachedFeasibleHints(year);
+        String src = "cache";
+        if (core == null || core.isEmpty()) {
+            core = buildGreedySeedHints(residents, rotations, varFactory,
+                rotationLengths, eligibleByRotation, totalBlocks);
+            src = "greedy";
+        }
+        if (core.isEmpty()) {
+            solverLog.append("Phase 0 FIX=lns: no core available — plain solve.\n");
+            return;
+        }
+        // Choose a random set of slots to leave FREE (the repair neighborhood).
+        double freeFrac = 0.30;
+        try { freeFrac = Double.parseDouble(System.getenv().getOrDefault("PHASE0_LNS_FREE_FRAC", "")); }
+        catch (NumberFormatException ignore) { /* default 0.30 */ }
+        Random rng = new Random();
+        Set<Integer> freeSlots = new HashSet<>();
+        for (int b = 0; b < totalBlocks; b++) if (rng.nextDouble() < freeFrac) freeSlots.add(b);
+        Set<Integer> frozenSlots = new HashSet<>();
+        for (int b = 0; b < totalBlocks; b++) if (!freeSlots.contains(b)) frozenSlots.add(b);
+
+        int fixed = fixFrozenSlots(model, varFactory, residents, rotations, totalBlocks,
+            rotationLengths, core, frozenSlots);
+        // Warm-start the free region too (hints don't constrain, can't fight the hard fixes).
+        applyHints(model, varFactory, residents, rotations, totalBlocks, core);
+        onProgress.accept(String.format(
+            "Phase 0 ▶ LNS repair (%s core): froze %d slots / %d vars, %d slots free.",
+            src, frozenSlots.size(), fixed, freeSlots.size()));
+        solverLog.append(String.format(
+            "Phase 0 FIX=lns: core=%s, froze %d slots (%d vars), free=%d slots (freeFrac=%.2f).\n",
+            src, frozenSlots.size(), fixed, freeSlots.size(), freeFrac));
+    }
+
+    // --- Option 5: presolve-bounded / search-first ---------------------------
+    /**
+     * Bounds or disables CP-SAT presolve so the SEARCH (where feasibility_jump lives) starts
+     * immediately. {@code presolve0} disables presolve entirely; {@code presolveN} (N≥1) caps
+     * presolve at N iterations. Risk: presolve sometimes SPEEDS search, so this can hurt good
+     * draws — measured, not assumed. stopAfterFirstSolution is set by the caller.
+     */
+    private void applyPresolveBound(CpSolver solver, String mode, StringBuilder solverLog) {
+        var p = solver.getParameters();
+        String digits = mode.substring("presolve".length());
+        int iters = 0;
+        try { iters = digits.isEmpty() ? 0 : Integer.parseInt(digits); }
+        catch (NumberFormatException ignore) { iters = 0; }
+        if (iters <= 0) {
+            p.setCpModelPresolve(false);
+            solverLog.append("Phase 0 FIX=presolve0: presolve DISABLED (search starts immediately).\n");
+        } else {
+            p.setMaxPresolveIterations(iters);
+            solverLog.append(String.format("Phase 0 FIX=presolve%d: presolve capped at %d iterations.\n", iters, iters));
         }
     }
 

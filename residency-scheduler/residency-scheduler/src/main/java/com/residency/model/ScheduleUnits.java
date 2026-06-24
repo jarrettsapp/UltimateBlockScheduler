@@ -6,7 +6,7 @@ package com.residency.model;
  * <h2>Why this class exists</h2>
  * The codebase has historically used the word "block" to mean two different
  * durations depending on the layer, which produced a class of silent unit bugs
- * (see REVIEW.md, findings H1/H2). This class fixes the vocabulary in one place
+ * (see PROJECT.md Code review, H1/H2). This class fixes the vocabulary in one place
  * so every conversion is explicit and verifiable.
  *
  * <h2>Canonical unit model</h2>
@@ -70,7 +70,7 @@ public final class ScheduleUnits {
      * <p>This replaces the historical {@code ceil(minBlocks) * minLen} formula,
      * which under-enforced requirements wherever a rotation allowed a 2-week
      * segment (e.g. a 2-block VA requirement enforced only 2 slots instead of 4).
-     * See REVIEW/RULES_REVIEW finding B1.
+     * See RULES.md §13 (finding B1).
      *
      * @param blocks requirement in 4-week blocks (may be fractional, e.g. 0.5)
      * @return the equivalent whole number of 2-week slots (rounded)
