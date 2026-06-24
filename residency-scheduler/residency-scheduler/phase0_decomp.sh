@@ -42,11 +42,16 @@ for mode in "${MODES[@]}"; do
   for i in $(seq 1 "$N"); do
     cp "$SAFE" "$WORK" && cp "$WORK" "$LIVE"   # fresh, identical DB for every run
     log="$OUT/${mode}_run_$i.log"
-    if [ "$mode" = "mono" ]; then
-      java -cp "$CP" com.residency.tools.HeadlessSolveRunner 2 300 1 1 1 > "$log" 2>&1
-    else
-      PHASE0_DECOMP="$mode" java -cp "$CP" com.residency.tools.HeadlessSolveRunner 2 300 1 1 1 > "$log" 2>&1
-    fi
+    case "$mode" in
+      mono)
+        java -cp "$CP" com.residency.tools.HeadlessSolveRunner 2 300 1 1 1 > "$log" 2>&1 ;;
+      monoC)   # monolithic with PHASE0_MODE=C (stop-after-first + probing off + polarity false)
+        PHASE0_MODE=C java -cp "$CP" com.residency.tools.HeadlessSolveRunner 2 300 1 1 1 > "$log" 2>&1 ;;
+      monoB)   # monolithic with PHASE0_MODE=B (greedy seed hints)
+        PHASE0_MODE=B java -cp "$CP" com.residency.tools.HeadlessSolveRunner 2 300 1 1 1 > "$log" 2>&1 ;;
+      *)
+        PHASE0_DECOMP="$mode" java -cp "$CP" com.residency.tools.HeadlessSolveRunner 2 300 1 1 1 > "$log" 2>&1 ;;
+    esac
     # Final Phase-0 result line from the solver log: "Phase 0 result: STATUS  (NNN.Ns)..."
     pline="$(grep -E 'Phase 0 result:' "$log" | tail -1 | tr -d '\r')"
     pstatus="$(echo "$pline" | sed -E 's/.*result: *([A-Z_]+).*/\1/')"
