@@ -138,6 +138,7 @@ public class CpSatSchedulerEngine {
     private final RotationLinkRuleDAO    linkRuleDAO;
     private final AuxFillerRotationDAO   auxFillerRotationDAO;
     private final Phase0SeedStatsDAO     seedStatsDAO;
+    private final Phase0CollectionRunsDAO collectionRunsDAO;
 
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile CpSolver activeSolver;
@@ -156,6 +157,7 @@ public class CpSatSchedulerEngine {
         linkRuleDAO          = new RotationLinkRuleDAO();
         auxFillerRotationDAO = new AuxFillerRotationDAO();
         seedStatsDAO         = new Phase0SeedStatsDAO();
+        collectionRunsDAO    = new Phase0CollectionRunsDAO();
     }
 
     /**
@@ -773,10 +775,12 @@ public class CpSatSchedulerEngine {
             activeSolver = null;
 
             // Option 1: persist the FIRST feasible Phase-0 assignment so later runs warm-start.
+            String bankedSeedId = null;
             if (p0fix.equals("cache")
                     && (status0 == CpSolverStatus.FEASIBLE || status0 == CpSolverStatus.OPTIMAL)) {
                 Map<String, Long> found =
                     extractHints(solver0, mc0.varFactory(), residents, rotations, totalBlocks);
+                bankedSeedId = seedId(found);
                 // Stamp the pool with the current model fingerprint so a later model change is
                 // detectable (triggers revalidation on the next replay run).
                 String fp = computeModelFingerprint(residents, rotations, reqMap,
@@ -784,6 +788,20 @@ public class CpSatSchedulerEngine {
                 try { configDAO.saveRawValue(CACHE_FP_PREFIX + year, fp); }
                 catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "fingerprint save failed", e); }
                 saveCachedFeasibleHints(year, found, solverLog);
+            }
+
+            // Durable per-run collection telemetry: record EVERY collection solve (feasible AND
+            // capped) so the time-to-feasibility history accumulates instead of being overwritten
+            // with the CSV. Capped runs are the right-censored data points the cap analysis needs.
+            // new_seed_id is null on a cap or duplicate; non-null when this run banked a NEW seed.
+            if (p0fix.equals("cache") && cacheCollect) {
+                try {
+                    double secs = (System.currentTimeMillis() - startMs) / 1000.0;
+                    collectionRunsDAO.record(year, status0.name(), secs, tier0LimitSec > 0 ? tier0LimitSec : null,
+                        bankedSeedId, config.getCpSatNumWorkers());
+                } catch (SQLException e) {
+                    LOG.log(java.util.logging.Level.WARNING, "collection-run telemetry write failed", e);
+                }
             }
         }
         solverLog.append(String.format("\nPhase 0 result: %s  (%.1fs)%s\n",

@@ -308,7 +308,30 @@ public class DatabaseManager {
             "ALTER TABLE phase0_seed_stats ADD COLUMN nn_dist_at_insert INTEGER",
             "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier1 INTEGER",
             "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier2 INTEGER",
-            "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier3 INTEGER"
+            "ALTER TABLE phase0_seed_stats ADD COLUMN best_run_tier3 INTEGER",
+            // Durable per-COLLECTION-RUN telemetry. One row per Phase-0 collection solve, written at
+            // the moment the solve finishes — so nothing is ever overwritten (the phase0_seed_results
+            // .csv is rewritten every run and loses history; this table accumulates forever). This is
+            // the cumulative time-to-feasibility record the cap analyses (KM, Wilson/NNT) need.
+            //   status      : OPTIMAL/FEASIBLE = a feasible seed was found (event); else capped (censored).
+            //   secs        : wall seconds the solve took (the time-to-event, or the censoring time).
+            //   cap_secs    : the Phase-0 time cap this run used (the censoring boundary — recorded
+            //                 explicitly so the cap analysis never has to infer it).
+            //   new_seed_id : seed_id banked by this run, or NULL if it found nothing / a duplicate.
+            //   worker_count: CP-SAT workers used (so stationarity can be verified, not just assumed).
+            //   run_at      : ISO timestamp. See SEED_POOL_STATS_IMPLEMENTATION_PLAN.md (telemetry table).
+            """
+            CREATE TABLE IF NOT EXISTS phase0_collection_runs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                year         INTEGER NOT NULL,
+                run_at       TEXT NOT NULL,
+                status       TEXT NOT NULL,
+                secs         REAL,
+                cap_secs     INTEGER,
+                new_seed_id  TEXT,
+                worker_count INTEGER
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_collruns_year ON phase0_collection_runs(year, run_at)"
         };
         try (Statement stmt = connection.createStatement()) {
             for (String sql : migrations) {

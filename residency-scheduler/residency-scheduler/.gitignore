@@ -45,3 +45,4 @@ cp.txt
 # ── OS / editor cruft ─────────────────────────────────────────
 .DS_Store
 Thumbs.db
+*_history.csv
