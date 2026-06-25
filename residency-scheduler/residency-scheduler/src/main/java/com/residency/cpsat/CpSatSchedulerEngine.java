@@ -961,7 +961,7 @@ public class CpSatSchedulerEngine {
         // wastes the budget. The Phase-2 result already scores at/above the v7 benchmark (fragile
         // 7–11, h→h 0). Phase-3 OPTIMIZATION is now an EXPLICIT opt-in for the later targeted depth
         // phase: set PHASE3_SKIP=0 to run it. (Mass-harvest relies on this default.)
-        if (!"0".equals(System.getenv("PHASE3_SKIP"))) {
+        if (!"0".equals(System.getenv("PHASE3_SKIP")) && !"1".equals(System.getenv("SINGLE_PHASE"))) {
             solverLog.append("Phase 3 SKIPPED (PHASE3_SKIP default on) — committing Phase-2 result. "
                 + "Set PHASE3_SKIP=0 to opt in to Phase-3 optimization.\n");
             return commitAndReturn(
@@ -1004,12 +1004,26 @@ public class CpSatSchedulerEngine {
         ObjectiveFunctionBuilder obj3 = new ObjectiveFunctionBuilder(
             mc3.model(), mc3.varFactory(), config, totalBlocks, auxCoverage);
 
-        if (bestTier1 < Integer.MAX_VALUE) {
-            IntVar tier1Lock3 = obj3.buildTier1Counter(residents, rotations);
-            mc3.model().addLessOrEqual(tier1Lock3, bestTier1);
+        // SINGLE_PHASE: collapse the staged P0→P1→P2→P3 flow into ONE solve straight off the seed.
+        // Tier-1/Tier-2 become HARD constraints (== their absolute no-compromise value, 0 — proven
+        // always achievable across 99 runs) instead of ≤ best-from-a-prior-phase locks, and the soft
+        // Phase-3 objective (4+2 + Sunday-coverage + cat-soft-excess) is minimized in the same solve.
+        // This sidesteps the #5025 staged-handoff crash entirely (no partial-hint-into-locked-model)
+        // and lets the solver optimize the weekend-coverage metric the staged flow never reached.
+        boolean singlePhase = "1".equals(System.getenv("SINGLE_PHASE"));
+        if (singlePhase) {
+            IntVar tier1Hard = obj3.buildTier1Counter(residents, rotations);
+            mc3.model().addEquality(tier1Hard, 0);          // absolute: no clinical violations
+            IntVar tier2Hard = obj3.buildTier2Core(residents, rotations);
+            mc3.model().addEquality(tier2Hard, 0);          // absolute: coverage levels exact
+        } else {
+            if (bestTier1 < Integer.MAX_VALUE) {
+                IntVar tier1Lock3 = obj3.buildTier1Counter(residents, rotations);
+                mc3.model().addLessOrEqual(tier1Lock3, bestTier1);
+            }
+            IntVar tier2Lock3 = obj3.buildTier2Core(residents, rotations);
+            if (bestTier2 < Long.MAX_VALUE) mc3.model().addLessOrEqual(tier2Lock3, bestTier2);
         }
-        IntVar tier2Lock3 = obj3.buildTier2Core(residents, rotations);
-        if (bestTier2 < Long.MAX_VALUE) mc3.model().addLessOrEqual(tier2Lock3, bestTier2);
 
         IntVar patternCost = obj3.buildPatternObjective(residents, rotations);
         // Sunday coverage shortfall: penalises weekends below the coverer target.
@@ -1098,6 +1112,18 @@ public class CpSatSchedulerEngine {
             solver3.getParameters().setUseFeasibilityJump(false);
             solver3.getParameters().setNumViolationLs(0);
         }
+        // PHASE3_IGNORE_SUBSOLVERS=a,b,c → explicitly drop named subsolvers from the portfolio (e.g.
+        // "fs_random", the worker that derefs the unbuilt fixed_search in #5025). Lets us keep MULTI-
+        // worker + repair_hint ON (the path that actually repairs the hint into a movable incumbent)
+        // while removing only the crashing worker. Comma-separated; blank = leave the portfolio intact.
+        String ignoreSubs = System.getenv().getOrDefault("PHASE3_IGNORE_SUBSOLVERS", "").trim();
+        if (!ignoreSubs.isEmpty()) {
+            for (String s : ignoreSubs.split(",")) {
+                String w = s.trim();
+                if (!w.isEmpty()) solver3.getParameters().addIgnoreSubsolvers(w);
+            }
+            solverLog.append("Phase 3: ignoring subsolvers " + ignoreSubs + "\n");
+        }
         if (tier3LimitSec > 0) solver3.getParameters().setMaxTimeInSeconds(tier3LimitSec);
         // PHASE3_SOLVER_LOG=1 turns on OR-Tools' own search log + dumps the effective parameter proto
         // (used to root-cause this assertion). Defaults OFF so normal/UI runs are unaffected.
@@ -1115,14 +1141,64 @@ public class CpSatSchedulerEngine {
         // improved incumbent so we can see where the objective plateaus and size budgets
         // from data instead of guesswork. No-op (and zero overhead) when unset, so the UI
         // is unaffected.
+        // SINGLE_PHASE two-stage "hint as incumbent" (SINGLE_PHASE_2STAGE=1): the failure mode we hit
+        // is that the parallel first-solution workers (which FIND a feasible start for the tier-locked
+        // model) are exactly the ones that crash (#5025), while 1 worker can't find a start at all.
+        // Break the deadlock: STAGE A pins the carried hint (fixVariablesToTheirHintedValue + 1 worker,
+        // ~few sec) to establish a guaranteed feasible incumbent WITHOUT any first-solution search;
+        // STAGE B re-hints from that incumbent, UNPINS, turns repair_hint OFF (the hint is already a
+        // real feasible solution, nothing to repair → removes the crash trigger) and optimizes from it.
+        boolean twoStage = "1".equals(System.getenv("SINGLE_PHASE_2STAGE"));
         CpSolverStatus status3;
-        if (trajPath != null && !trajPath.isBlank()) {
-            TrajectoryCallback traj = new TrajectoryCallback(trajPath, startMs);
+        TrajectoryCallback traj = (trajPath != null && !trajPath.isBlank())
+            ? new TrajectoryCallback(trajPath, startMs) : null;
+        if (twoStage) {
+            // STAGE A — pin hint, 1 worker, short cap → instant feasible incumbent.
+            CpSolver solverA = new CpSolver();
+            solverA.getParameters().setNumWorkers(1);
+            solverA.getParameters().setFixVariablesToTheirHintedValue(true);
+            solverA.getParameters().setMaxTimeInSeconds(Math.min(30, Math.max(5, tier3LimitSec)));
+            activeSolver = solverA;
+            CpSolverStatus stA = solverA.solve(mc3.model());
+            solverLog.append(String.format("SINGLE_PHASE 2-stage A (pin hint, 1w): %s\n", stA));
+            if (stA == CpSolverStatus.OPTIMAL || stA == CpSolverStatus.FEASIBLE) {
+                // Re-hint Stage B from Stage A's concrete solution (complete, feasible).
+                Map<String,Long> aSol = extractHints(solverA, mc3.varFactory(), residents, rotations, totalBlocks);
+                // rebuild a fresh model so the pin constraints from Stage A don't carry over
+                ModelContext mcB = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
+                    eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
+                ObjectiveFunctionBuilder objB = new ObjectiveFunctionBuilder(
+                    mcB.model(), mcB.varFactory(), config, totalBlocks, auxCoverage);
+                IntVar t1B = objB.buildTier1Counter(residents, rotations); mcB.model().addEquality(t1B, 0);
+                IntVar t2B = objB.buildTier2Core(residents, rotations);    mcB.model().addEquality(t2B, 0);
+                IntVar patB = objB.buildPatternObjective(residents, rotations);
+                IntVar sunB = objB.buildSundayCoverageObjective(residents);
+                IntVar catB = objB.buildCategoricalSoftCapObjective(residents, rotations);
+                mcB.model().minimize(LinearExpr.newBuilder()
+                    .add(patB)
+                    .addTerm(sunB, config.getWeightSundayCoverage())
+                    .addTerm(catB, config.getWeightCategoricalSoftExcess()).build());
+                applyHints(mcB.model(), mcB.varFactory(), residents, rotations, totalBlocks, aSol);
+                solver3 = new CpSolver();
+                solver3.getParameters().setNumWorkers(p3Workers);
+                solver3.getParameters().setRepairHint(false);   // hint is already feasible → no repair → no #5025
+                if (tier3LimitSec > 0) solver3.getParameters().setMaxTimeInSeconds(tier3LimitSec);
+                solver3.getParameters().setLogToStdout(p3SolverLog);
+                solver3.getParameters().setLogSearchProgress(p3SolverLog);
+                activeSolver = solver3;
+                solverLog.append(String.format("SINGLE_PHASE 2-stage B (optimize from incumbent, %dw, repairHint OFF)\n", p3Workers));
+                status3 = (traj != null) ? solver3.solve(mcB.model(), traj) : solver3.solve(mcB.model());
+                mc3 = mcB;   // extraction below reads mc3.varFactory()
+            } else {
+                solverLog.append("SINGLE_PHASE 2-stage A failed to pin the hint — falling back.\n");
+                status3 = stA;
+            }
+        } else if (traj != null) {
             status3 = solver3.solve(mc3.model(), traj);
-            traj.close();
         } else {
             status3 = solver3.solve(mc3.model());
         }
+        if (traj != null) traj.close();
         activeSolver = null;
         solverLog.append(String.format("Phase 3 result: %s  (%.1fs)\n",
             status3, (System.currentTimeMillis() - startMs) / 1000.0));
