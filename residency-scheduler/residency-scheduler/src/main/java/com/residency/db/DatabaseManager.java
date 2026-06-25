@@ -385,6 +385,15 @@ public class DatabaseManager {
             )""",
             "ALTER TABLE solve_runs ADD COLUMN run_status TEXT",
             "ALTER TABLE solve_runs ADD COLUMN final_objective REAL",
+            // Heavy+Medium consecutive-run (stretch) summaries (score_and_snapshot fills them).
+            // The max-consec-H/M rule is currently HARD (caps each run at maxConsecutiveHeavyMediumWeeks,
+            // = 4wk here), so hm_max_stretch<=4 and hm_runs_ge6wk=0 on every schedule today. These are
+            // wired in NOW so that IF the cap is later relaxed to SOFT, we already see how long the
+            // longest H/M run is (hm_max_stretch) and how many runs reach 6+ weeks (hm_runs_ge6wk) —
+            // the headline numbers under a soft cap. hm_total_wk is a per-resident H/M load proxy.
+            "ALTER TABLE solve_run_metrics ADD COLUMN hm_max_stretch INTEGER",
+            "ALTER TABLE solve_run_metrics ADD COLUMN hm_runs_ge6wk INTEGER",
+            "ALTER TABLE solve_run_metrics ADD COLUMN hm_total_wk INTEGER",
             "CREATE INDEX IF NOT EXISTS idx_solve_runs_status ON solve_runs(run_status, data_epoch)",
             "CREATE INDEX IF NOT EXISTS idx_solve_runs_epoch ON solve_runs(data_epoch, year, run_at)",
             "CREATE INDEX IF NOT EXISTS idx_solve_runs_seed ON solve_runs(seed_id)",

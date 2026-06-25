@@ -29,6 +29,8 @@ sweep_state.json
 harvest_runs/
 harvest_results.csv
 harvest_state.json
+seed_vs_final.csv
+harvest_v2_chain.out
 harvest.lock
 sweep.lock
 HARVEST_STATUS.md

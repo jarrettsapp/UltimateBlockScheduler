@@ -21,6 +21,43 @@ SRC={'Inpatient GI','Infectious Disease','Outpatient GI','Outpatient Pulmonology
 Y7_DAYS='Younker 7 Days'
 
 
+def score_grid(g, cat, ress):
+    """Score a schedule grid — the SINGLE source of truth for all primary metrics, shared by the
+    live scorer (main) and the seed-vs-final comparison tool. `g` maps resident_id -> list[27] of
+    rotation NAMES (1-based block index, index 0 unused, index w and w+1 used). `cat` = set of
+    categorical resident ids. `ress` = {resident_id: name}. Returns a dict of metrics + perw/runs6/
+    hm_hist. Pure function of the grid — identical math whether the grid came from the live
+    `assignments` table, a saved version, or a decoded seed."""
+    vol=frag=heal=0; perw=[]
+    for w in range(1,26):
+        e=sum(1 for rid in cat if g.get(rid,[None]*27)[w] in SRC and g.get(rid,[None]*27)[w] not in HEAVY and g.get(rid,[None]*27)[w+1] not in HEAVY)
+        perw.append(e); vol+=e==0;frag+=e==1;heal+=e>1
+    over=hh=0; runs6=[]
+    hm_stretches=[]          # every H/M run length in weeks, across all categorical residents
+    def t(r):return 'HM' if r in HEAVY or r in MEDIUM else 'L'
+    for rid in cat:
+        gg=g.get(rid,[None]*27);i=1
+        while i<=26:
+            if t(gg[i])=='HM':
+                j=i+1
+                while j<=26 and t(gg[j])=='HM':j+=1
+                wk=(j-i)*2
+                hm_stretches.append(wk)
+                if wk>6: over+=1; runs6.append((ress.get(rid,rid),wk))
+                i=j
+            else:i+=1
+        for b in range(1,26):
+            if gg[b] in HEAVY and gg[b+1] in HEAVY and gg[b]!=gg[b+1]:hh+=1
+    from collections import Counter
+    return {
+        'volunteer':vol, 'fragile':frag, 'healthy':heal, 'heavy_heavy':hh, 'runs_gt6wk':over,
+        'hm_max':max(hm_stretches) if hm_stretches else 0,
+        'hm_runs_ge6':sum(1 for w in hm_stretches if w>=6),
+        'hm_total':sum(hm_stretches),
+        'perw':perw, 'runs6':runs6, 'hm_hist':dict(sorted(Counter(hm_stretches).items())),
+    }
+
+
 def _git_commit():
     try:
         return subprocess.check_output(['git','rev-parse','--short','HEAD'],
@@ -94,7 +131,8 @@ def _saturday_y7(g, cat, rots_by_name):
     return covered
 
 
-def _write_solve_run(c, a, vol, frag, heal, hh, over, perw, sat, version_id):
+def _write_solve_run(c, a, vol, frag, heal, hh, over, perw, sat, version_id,
+                     hm_max=None, hm_runs_ge6=None, hm_total=None):
     """Populate the solve_runs family. Best-effort; gated on the new tables existing.
     Returns the new run_id or None. Caller wraps in try/except + commit."""
     # Tables may not be migrated yet (seed-gen still running) — fail soft.
@@ -141,8 +179,9 @@ def _write_solve_run(c, a, vol, frag, heal, hh, over, perw, sat, version_id):
     ).lastrowid
     c.execute(
         "INSERT OR REPLACE INTO solve_run_metrics(run_id,volunteer,fragile,healthy,heavy_heavy,"
-        "runs_gt6wk,saturday_coverage) VALUES(?,?,?,?,?,?,?)",
-        (rid,vol,frag,heal,hh,over,sat))
+        "runs_gt6wk,saturday_coverage,hm_max_stretch,hm_runs_ge6wk,hm_total_wk) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (rid,vol,frag,heal,hh,over,sat,hm_max,hm_runs_ge6,hm_total))
     c.executemany("INSERT OR REPLACE INTO solve_run_weekend(run_id,weekend_index,coverers) VALUES(?,?,?)",
                   [(rid,i,cov) for i,cov in enumerate(perw)])
     if traj:
@@ -169,32 +208,19 @@ def main():
     cat=set(ress)
     yb={r[0]:r[1] for r in c.execute('SELECT id,block_number FROM blocks WHERE schedule_year=?',(a.year,))}
     g={}
-    live_rows=[]
     for rid,rotid,bid in c.execute('SELECT resident_id,rotation_id,block_id FROM assignments WHERE block_id IN (SELECT id FROM blocks WHERE schedule_year=?)',(a.year,)):
         bn=yb.get(bid)
         if bn:
             g.setdefault(rid,[None]*27)[bn]=rots.get(rotid)
-            if rid in cat: live_rows.append((rid,rotid,bn))
-    vol=frag=heal=0; perw=[]
-    for w in range(1,26):
-        e=sum(1 for rid in cat if g.get(rid,[None]*27)[w] in SRC and g.get(rid,[None]*27)[w] not in HEAVY and g.get(rid,[None]*27)[w+1] not in HEAVY)
-        perw.append(e); vol+=e==0;frag+=e==1;heal+=e>1
-    over=hh=0; runs6=[]
-    def t(r):return 'HM' if r in HEAVY or r in MEDIUM else 'L'
-    for rid in cat:
-        gg=g.get(rid,[None]*27);i=1
-        while i<=26:
-            if t(gg[i])=='HM':
-                j=i+1
-                while j<=26 and t(gg[j])=='HM':j+=1
-                if (j-i)*2>6: over+=1; runs6.append((ress[rid],(j-i)*2))
-                i=j
-            else:i+=1
-        for b in range(1,26):
-            if gg[b] in HEAVY and gg[b+1] in HEAVY and gg[b]!=gg[b+1]:hh+=1
+    # Score via the single shared definition (also used by compare_seed_vs_final.py).
+    sc=score_grid(g, cat, ress)
+    vol,frag,heal,hh,over=sc['volunteer'],sc['fragile'],sc['healthy'],sc['heavy_heavy'],sc['runs_gt6wk']
+    perw=sc['perw']; hm_max=sc['hm_max']; hm_runs_ge6=sc['hm_runs_ge6']; hm_total=sc['hm_total']
     print(f'volunteer={vol}  fragile={frag}  healthy={heal}  heavy->heavy={hh}  runs>6wk={over}')
+    print(f'hm_max_stretch={hm_max}wk  hm_runs>=6wk={hm_runs_ge6}  hm_total_wk={hm_total}')
     print(f'per-weekend coverers: {perw}')
-    print(f'runs>6wk detail: {runs6}')
+    print(f'runs>6wk detail: {sc["runs6"]}')
+    print(f'hm stretch histogram (weeks:count): {sc["hm_hist"]}')
     if not a.no_save:
         # snapshot LIVE year into a new version (categoricals only, matching prior versions)
         nid=c.execute('SELECT COALESCE(MAX(id),0)+1 FROM schedule_versions').fetchone()[0]
@@ -215,7 +241,8 @@ def main():
         # migrated yet (seed-gen still running) — the legacy version save above is unaffected.
         try:
             sat=_saturday_y7(g, cat, set(rots.values()))
-            run_id=_write_solve_run(c, a, vol, frag, heal, hh, over, perw, sat, nid)
+            run_id=_write_solve_run(c, a, vol, frag, heal, hh, over, perw, sat, nid,
+                                    hm_max=hm_max, hm_runs_ge6=hm_runs_ge6, hm_total=hm_total)
             if run_id is not None:
                 db.commit()
                 print(f'SOLVE_RUN_ID={run_id}  (epoch={a.data_epoch} label={a.config_label} saturday_y7={sat})')
