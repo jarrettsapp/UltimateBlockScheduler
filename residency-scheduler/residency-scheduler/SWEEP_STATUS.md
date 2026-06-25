@@ -1,13 +1,10 @@
 # Sweep status
 
-_Updated 08:33 PM CDT (Tue Jun 23)_
+_Updated 11:33 PM CDT (Wed Jun 24)_
 
 **State:** RUNNING
 
-**Progress:** 21 done, 1 failed, of 9 queued units
-
-**Running now:** `cfgR6-01-r1#c15ae55e` (floor=OFF/2/95)
-**ETA:** 10:15 PM CDT (Tue Jun 23) (loose, pre-Phase-3)
+**Progress:** 22 done, 3 failed, of 10 queued units
 
 ## Completed units
 
@@ -37,3 +34,6 @@ _Updated 08:33 PM CDT (Tue Jun 23)_
 | cfgR5-01-r5#7bd50fd9 | OFF/2/95 | 3 | 2 | 20 | 0 | 0 | 1926.5 | 42 | DONE |
 | cfgR5-01-r6#7bd50fd9 | OFF/2/95 | - | - | - | - | - | - | - | RUNNING |
 | cfgR6-01-r1#c15ae55e | OFF/2/95 | - | - | - | - | - | - | - | RUNNING |
+| cfgI6A-r1#fb348b8f | OFF/2/95 | 3 | 6 | 16 | 0 | 0 | None | 46 | FAILED |
+| cfgI6A-r2#fb348b8f | OFF/2/95 | 2 | 8 | 15 | 0 | 0 | None | 47 | FAILED |
+| cfgI6A-r3#fb348b8f | OFF/2/95 | 4 | 6 | 15 | 0 | 0 | 96.2 | 48 | DONE |

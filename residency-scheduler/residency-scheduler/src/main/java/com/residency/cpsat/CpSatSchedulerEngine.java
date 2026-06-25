@@ -689,6 +689,9 @@ public class CpSatSchedulerEngine {
             // See PHASE0_DECOMPOSITION_PLAN.md "post-decomp FIX options".
             String p0fix = System.getenv().getOrDefault("PHASE0_FIX", "").trim();
             boolean p0fixDiag = "1".equals(System.getenv("PHASE0_DIAG"));
+            // Set when the default path replayed a cached seed: Phase 0 then only needs to validate
+            // the warm start, so we stop at the first feasible solution (collapsing P0 to ~instant).
+            boolean seededDefaultPath = false;
 
             // PHASE0_CACHE_COLLECT=1 = pool-SEEDING mode: solve COLD (no replay) so each run
             // explores freshly and the pool accumulates genuine variety, persisting every new
@@ -726,11 +729,44 @@ public class CpSatSchedulerEngine {
                 // for CP-SAT to repair. Single-shot — never a cold staged window.
                 applyLnsCore(mc0.model(), mc0.varFactory(), residents, rotations, config,
                     rotationLengths, eligibleByRotation, totalBlocks, year, onProgress, solverLog);
+            } else if (p0fix.isEmpty() && !useB && !useA
+                    && !"1".equals(System.getenv("PHASE0_NO_SEED"))) {
+                // DEFAULT PATH seed warm-start (Phase-0 acceleration, the proven win): when the
+                // year's pool is non-empty, replay one cached feasible assignment as Phase-0 hints
+                // so a normal real solve starts warm instead of cold-searching for feasibility.
+                // Phase 0 then collapses to validation/instant and Phase 1 inherits the warm start
+                // via p0.hints() (existing carry-forward at 834–838) — no separate Phase-1 hinting
+                // needed. The chosen seed_id is recorded in runSeedId so the run is attributable to
+                // its seed (join key for solve_runs ↔ phase0_seed_stats; closes the recordOutcome
+                // loop at 1032–1043). Honors PHASE0_SEED_SELECT=roundrobin for fair coverage.
+                // Reversible: empty pool ⇒ falls through to today's cold Phase 0 unchanged; opt out
+                // entirely with PHASE0_NO_SEED=1. Excludes the explicit Option A/B experimental
+                // warm-starts so they remain isolated.
+                Map<String, Long> seed = loadCachedFeasibleHints(year);
+                if (seed != null && !seed.isEmpty()) {
+                    runSeedId = seedId(seed);
+                    applyHints(mc0.model(), mc0.varFactory(), residents, rotations, totalBlocks, seed);
+                    seededDefaultPath = true; // Phase 0 only needs to validate the seed → stop-first.
+                    onProgress.accept(String.format(
+                        "Phase 0 ▶ seeded warm-start from seed_id=%s (%d vars) — validating…",
+                        runSeedId.substring(0, 8), seed.size()));
+                    solverLog.append(String.format(
+                        "Phase 0: Phase-1 seeded from seed_id=%s (%d vars, default-path replay).\n",
+                        runSeedId.substring(0, 8), seed.size()));
+                } else {
+                    solverLog.append("Phase 0: seed pool empty — cold solve (no warm start).\n");
+                }
             }
 
             // Build the solver. fjportfolio / multiseed / presolveN tune it; cache & lns reuse
             // the standard configureSolver (Option C tuning still available via PHASE0_MODE=C).
-            solver0 = useC
+            // A seeded default-path run uses configureSolverPhase0 too: it is the purpose-built
+            // "validate a warm-start seed and stop at first feasible" config (probing off, polarity
+            // FALSE, stop-after-first). The plain configureSolver + a bare setStopAfterFirstSolution
+            // on a hinted/repairHint model trips an OR-Tools 9.9 native assertion
+            // (heuristics.fixed_search != nullptr); configureSolverPhase0 avoids it, exactly as the
+            // FIX=cache replay path already relies on.
+            solver0 = (useC || seededDefaultPath)
                 ? configureSolverPhase0(config, tier0LimitSec)
                 : configureSolver(config, tier0LimitSec);
             if (p0fix.startsWith("presolve")) {
@@ -747,8 +783,9 @@ public class CpSatSchedulerEngine {
                 applyFeasibilityJumpPortfolio(solver0, solverLog); // Option 2
             }
             // Phase-0 only needs a feasible incumbent: stop at the first solution for all FIX
-            // modes (configureSolverPhase0 already does this; configureSolver does not).
-            if (!p0fix.isEmpty() && !useC)
+            // modes (configureSolverPhase0 already does this; configureSolver does not). The seeded
+            // default path already got configureSolverPhase0 above, so it has stop-after-first too.
+            if (!p0fix.isEmpty() && !useC && !seededDefaultPath)
                 solver0.getParameters().setStopAfterFirstSolution(true);
 
             // Pool-seeding: randomize the seed each collect run so cold solves land in
@@ -917,11 +954,52 @@ public class CpSatSchedulerEngine {
                 : p1.feasible() ? p1 : p0,
             feasReport, solverLog, startMs, year, blocks, residents, rotations, config);
 
+        // ─── Phase-2-only default (PHASE3_SKIP, default ON) ─────────────────────────
+        // Per the #5025 root-cause finding, no hint/pin lane RELIABLY engages Phase 3: it is a
+        // per-seed coin-flip (~⅓ optimize), and a non-engaging run burns the FULL ~900s P3 budget
+        // win-or-lose. So a DEFAULT run is honest Phase-2-only: it never attempts Phase 3 and never
+        // wastes the budget. The Phase-2 result already scores at/above the v7 benchmark (fragile
+        // 7–11, h→h 0). Phase-3 OPTIMIZATION is now an EXPLICIT opt-in for the later targeted depth
+        // phase: set PHASE3_SKIP=0 to run it. (Mass-harvest relies on this default.)
+        if (!"0".equals(System.getenv("PHASE3_SKIP"))) {
+            solverLog.append("Phase 3 SKIPPED (PHASE3_SKIP default on) — committing Phase-2 result. "
+                + "Set PHASE3_SKIP=0 to opt in to Phase-3 optimization.\n");
+            return commitAndReturn(
+                status2 == CpSolverStatus.FEASIBLE || status2 == CpSolverStatus.OPTIMAL ? p2
+                    : p1.feasible() ? p1 : p0,
+                feasReport, solverLog, startMs, year, blocks, residents, rotations, config);
+        }
+
         // ─── Phase 3: Minimize 4+2 pattern with Tier-1 and Tier-2 locked ──
         ModelContext mc3 = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
             eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
-        if (!p2.hints().isEmpty())
-            applyHints(mc3.model(), mc3.varFactory(), residents, rotations, totalBlocks, p2.hints());
+        // Carry the prior phase's assignment as Phase 3's warm start. PHASE3_SKIP_HINT=1 omits it,
+        // letting Phase 3 run probing-ON without the carried-hint crash trigger — used to measure
+        // whether a Tier-locked Phase 3 genuinely searches/optimizes the soft objective (the
+        // historical pre-seed-wiring behavior), as opposed to the pinning/UNKNOWN modes.
+        boolean p3SkipHint = "1".equals(System.getenv("PHASE3_SKIP_HINT"));
+        // PHASE3_HINT_FRACTION (0<f<=1, default 1) thins the carried hint to a fraction of its vars.
+        // Paired with PHASE3_FIX_TO_HINT=on this PINS only that fraction: enough to make OR-Tools
+        // construct the fixed_search heuristic (so the fs_random worker's assertion holds) WITHOUT
+        // pinning the whole schedule — leaving the rest free to optimize. The untested documented
+        // lever against bug #5025's fixed_search-null assertion.
+        double p3HintFrac = 1.0;
+        try { p3HintFrac = Math.max(0.0, Math.min(1.0, Double.parseDouble(envOr("PHASE3_HINT_FRACTION", "1")))); }
+        catch (NumberFormatException ignore) { /* keep 1.0 */ }
+        Map<String, Long> p3Hints = p2.hints();
+        if (p3HintFrac < 1.0 && !p3Hints.isEmpty()) {
+            Map<String, Long> thinned = new HashMap<>();
+            long keepEvery = Math.max(1, Math.round(1.0 / p3HintFrac));
+            long idx = 0;
+            for (Map.Entry<String, Long> e : p3Hints.entrySet())
+                if (idx++ % keepEvery == 0) thinned.put(e.getKey(), e.getValue());
+            p3Hints = thinned;
+            solverLog.append(String.format("Phase 3: hint thinned to %.2f (%d vars).\n",
+                p3HintFrac, p3Hints.size()));
+        }
+        if (!p3Hints.isEmpty() && !p3SkipHint)
+            applyHints(mc3.model(), mc3.varFactory(), residents, rotations, totalBlocks, p3Hints);
+        if (p3SkipHint) solverLog.append("Phase 3: carried hint SKIPPED (PHASE3_SKIP_HINT=1).\n");
 
         ObjectiveFunctionBuilder obj3 = new ObjectiveFunctionBuilder(
             mc3.model(), mc3.varFactory(), config, totalBlocks, auxCoverage);
@@ -958,15 +1036,86 @@ public class CpSatSchedulerEngine {
         }
         mc3.model().minimize(obj3Expr.build());
 
-        CpSolver solver3 = configureSolver(config, tier3LimitSec);
+        // Phase 3 solver — seed-wiring interaction RESOLVED (see SOLVE_DATA_INFRA_PLAN.md / the
+        // fixed_search root-cause comment below). History of the matrix that led here, on real data
+        // with the seed pipeline:
+        //   • probing ON + repairHint, MULTI-worker  → OR-Tools 9.9 native crash (fixed_search != null),
+        //     tripped by a parallel fs_random first-solution worker on the partial carried hint.
+        //   • probing OFF + repairHint                → UNKNOWN, no incumbent → falls back to the
+        //     UN-optimized Phase-2 result (not real optimization).
+        //   • fixVariablesToTheirHintedValue ON       → PINS the full carried assignment, so Phase 3
+        //     "proves OPTIMAL" in ~1s WITHOUT searching — a FALSE green. NOT a real fix.
+        //   • probing ON + repairHint + SINGLE worker → FIX: repairs the hint into a movable incumbent
+        //     and optimizes the soft objective (FEASIBLE, never instant OPTIMAL). This is the default.
+        // Env knobs remain for controlled experiments / re-observing the old failure modes.
+        // DEFAULTS now reflect the verified post-fix healthy config: probing ON + repairHint ON +
+        // fixToHint OFF, run single-worker (below). This makes a normal/UI run actually OPTIMIZE the
+        // soft objective (FEASIBLE search), not fall back to the un-optimized Phase-2 result.
+        boolean p3Probing = "on".equalsIgnoreCase(envOr("PHASE3_PROBING", "on"));
+        boolean p3Repair  = !"off".equalsIgnoreCase(envOr("PHASE3_REPAIR_HINT", "on"));
+        boolean p3FixHint = "on".equalsIgnoreCase(envOr("PHASE3_FIX_TO_HINT", "off"));
+        boolean p3SolverLog = "1".equals(System.getenv("PHASE3_SOLVER_LOG"));
+        int p3Workers = config.getCpSatNumWorkers();
+        try { p3Workers = Math.max(1, Integer.parseInt(envOr("PHASE3_WORKERS", String.valueOf(p3Workers)))); }
+        catch (NumberFormatException ignore) { /* keep config value */ }
+        String trajPath = System.getenv("SOLVE_TRAJECTORY_CSV");
+
+        // ── ROOT-CAUSE FIX for the seed-wiring Phase-3 crash (heuristics.fixed_search != nullptr,
+        // OR-Tools 9.9.3963). This is upstream bug google/or-tools#5025: with repair_hint=true AND a
+        // multi-worker portfolio, a parallel hint-following subsolver dereferences a fixed_search
+        // heuristic that was never constructed → native CHECK abort. In #5025 the worker is shared_tree
+        // (spawns at high worker counts); in OUR full CP-SAT log at 10 workers it is fs_random. The
+        // common trigger is the hint-repair path on a PARTIAL carried hint (only the 9119 occupancy/
+        // start vars of ~24544) that has not yet become a feasible incumbent (log: best:inf). NOT fixed
+        // upstream as of 9.15 — an OR-Tools bump does not help. The historical pre-seed-wiring run
+        // didn't crash only because its hint came from a cold Phase-0 OPTIMAL solve worker 0 could
+        // repair first — a timing accident. Verified non-fixes: useFeasibilityJump=false / numViolationLs=0
+        // (don't remove fs_random); ignoreSubsolvers("fs_random") → MODEL_INVALID; fixToHint=ON pins the
+        // seed → false instant OPTIMAL. The knobs below let us keep the full 10-worker optimize while
+        // suppressing the specific crashing subsolvers; sweep them via env to land a config that keeps
+        // the workers busy AND optimizes (FEASIBLE, never instant OPTIMAL).
+        int p3SharedTree = (int) parseLongOr("PHASE3_SHARED_TREE", 0);   // 0 = disable shared_tree subsolver
+        int p3HintConflict = (int) parseLongOr("PHASE3_HINT_CONFLICT_LIMIT", -1); // <0 = leave default
+        // Only suppress the feasibility-jump first-solution workers in the MULTI-worker portfolio (the
+        // crash is a multi-worker phenomenon). At 1 worker, removing FJ + violation_ls leaves no valid
+        // first-solution strategy → MODEL_INVALID; single worker keeps the full (already crash-free) set.
+        boolean p3NoFj = p3Workers > 1 && !"1".equals(System.getenv("PHASE3_KEEP_FJ"));
+
+        CpSolver solver3 = new CpSolver();
+        solver3.getParameters().setNumWorkers(p3Workers);
+        solver3.getParameters().setRepairHint(p3Repair);
+        solver3.getParameters().setFixVariablesToTheirHintedValue(p3FixHint);
+        if (!p3Probing) solver3.getParameters().setCpModelProbingLevel(0);
+        // shared_tree / lns worker tuning only applies to the multi-worker portfolio. At 1 worker the
+        // validator rejects any shared_tree+lns allocation ("Cannot have more shared tree + lns workers
+        // than total workers") → MODEL_INVALID, so leave a single worker's defaults untouched.
+        if (p3Workers > 1) {
+            solver3.getParameters().setSharedTreeNumWorkers(p3SharedTree);
+            if (p3SharedTree <= 0) solver3.getParameters().setUseSharedTreeSearch(false);
+        }
+        if (p3HintConflict >= 0) solver3.getParameters().setHintConflictLimit(p3HintConflict);
+        if (p3NoFj) {
+            solver3.getParameters().setUseFeasibilityJump(false);
+            solver3.getParameters().setNumViolationLs(0);
+        }
+        if (tier3LimitSec > 0) solver3.getParameters().setMaxTimeInSeconds(tier3LimitSec);
+        // PHASE3_SOLVER_LOG=1 turns on OR-Tools' own search log + dumps the effective parameter proto
+        // (used to root-cause this assertion). Defaults OFF so normal/UI runs are unaffected.
+        solver3.getParameters().setLogToStdout(p3SolverLog);
+        solver3.getParameters().setLogSearchProgress(p3SolverLog);
         activeSolver = solver3;
+        solverLog.append(String.format(
+            "Phase 3 solver: workers=%d probing=%s repairHint=%s fixToHint=%s sharedTree=%d hintConflict=%d noFJ=%s\n",
+            p3Workers, p3Probing ? "ON" : "OFF", p3Repair ? "ON" : "OFF", p3FixHint ? "ON" : "OFF",
+            p3SharedTree, p3HintConflict, p3NoFj));
+        if (p3SolverLog) solverLog.append("Phase 3 effective params:\n"
+            + solver3.getParameters().toString() + "\n");
         // Optional Phase-3 objective trajectory capture (headless analysis). When the
         // SOLVE_TRAJECTORY_CSV env var is set, record (elapsed_s, objective) on every
         // improved incumbent so we can see where the objective plateaus and size budgets
         // from data instead of guesswork. No-op (and zero overhead) when unset, so the UI
         // is unaffected.
         CpSolverStatus status3;
-        String trajPath = System.getenv("SOLVE_TRAJECTORY_CSV");
         if (trajPath != null && !trajPath.isBlank()) {
             TrajectoryCallback traj = new TrajectoryCallback(trajPath, startMs);
             status3 = solver3.solve(mc3.model(), traj);
@@ -1438,6 +1587,18 @@ public class CpSatSchedulerEngine {
     private Map<String, Long> loadCachedFeasibleHints(int year) {
         List<Map<String, Long>> pool = loadCachedFeasiblePool(year);
         if (pool.isEmpty()) return null;
+        // PHASE0_SEED_ID pins ONE specific seed by id (full hash or any unique prefix, e.g. the
+        // 8-char id shown in logs/CSV). Used to REPEAT the same seed across runs — e.g. the seed→seed
+        // variance / ICC experiment — which roundrobin/random can't do (they deliberately spread).
+        // Overrides PHASE0_SEED_SELECT. If the id matches no pooled seed, we log and fall through to
+        // the normal selection rather than silently solving the wrong seed.
+        String pinId = System.getenv().getOrDefault("PHASE0_SEED_ID", "").trim().toLowerCase();
+        if (!pinId.isEmpty()) {
+            for (Map<String, Long> a : pool) {
+                if (seedId(a).startsWith(pinId)) return a;
+            }
+            LOG.warning("PHASE0_SEED_ID=" + pinId + " matched no pooled seed — using normal selection.");
+        }
         String mode = System.getenv().getOrDefault("PHASE0_SEED_SELECT", "random").trim().toLowerCase();
         if (mode.equals("roundrobin")) {
             try {
@@ -2088,7 +2249,37 @@ public class CpSatSchedulerEngine {
         return hints;
     }
 
+    /** Trimmed env var with a default when unset/blank. */
+    private static String envOr(String key, String dflt) {
+        String v = System.getenv(key);
+        return (v == null || v.isBlank()) ? dflt : v.trim();
+    }
+
+    /** Parses env var {@code key} as a long, returning {@code dflt} if unset or unparseable. */
+    private static long parseLongOr(String key, long dflt) {
+        try { return Long.parseLong(envOr(key, String.valueOf(dflt))); }
+        catch (NumberFormatException e) { return dflt; }
+    }
+
+    /** Back-compat default: probing OFF (the safe setting for the seed-carrying early phases). */
     private CpSolver configureSolver(ScheduleConfig config, int timeLimitSec) {
+        return configureSolver(config, timeLimitSec, false);
+    }
+
+    /**
+     * Builds an optimization-phase solver.
+     *
+     * @param allowProbing when true, CP-SAT probing presolve is left at its default (ON). Probing
+     *   tightens the model before search — pure presolve, so it never changes the optimum, only
+     *   speed-to-solution within the time budget. It MUST stay OFF for any phase that carries a
+     *   FULL warm-start hint with {@code repairHint=true}: that combination trips an OR-Tools 9.9
+     *   native assertion ({@code heuristics.fixed_search != nullptr}) and aborts the process. The
+     *   seed-carrying early phases (0/1) therefore pass {@code false}; Phase 2/3 may pass
+     *   {@code true} to keep probing's search acceleration. The env var
+     *   {@code PHASE3_PROBING=on|off} overrides Phase 3 explicitly so probing's effect can be
+     *   A/B-measured. See SOLVE_DATA_INFRA_PLAN.md (probing scope experiment).
+     */
+    private CpSolver configureSolver(ScheduleConfig config, int timeLimitSec, boolean allowProbing) {
         CpSolver solver = new CpSolver();
         solver.getParameters().setNumWorkers(config.getCpSatNumWorkers());
         solver.getParameters().setLogToStdout(false);
@@ -2097,6 +2288,7 @@ public class CpSatSchedulerEngine {
         // without ever turning the prior phase's solution into an incumbent and return UNKNOWN,
         // forcing a fallback to the un-optimized earlier phase. Harmless when no hint is set.
         solver.getParameters().setRepairHint(true);
+        if (!allowProbing) solver.getParameters().setCpModelProbingLevel(0);
         if (timeLimitSec > 0) solver.getParameters().setMaxTimeInSeconds(timeLimitSec);
         return solver;
     }

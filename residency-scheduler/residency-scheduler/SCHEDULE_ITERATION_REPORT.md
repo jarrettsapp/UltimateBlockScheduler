@@ -357,6 +357,7 @@ Tier shading: **Heavy** = ICU, VA, BMC, Y7D, Y7N, Y8 · **Medium** = GI, ID · *
 
 | Res | 1a | 1b | 2a | 2b | 3a | 3b | 4a | 4b | 5a | 5b | 6a | 6b | 7a | 7b | 8a | 8b | 9a | 9b | 10a | 10b | 11a | 11b | 12a | 12b | 13a | 13b |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| cfgI6A r3 (OFF/2/95) | OFF/2/95 | 4 | 6 | 15 | 0 | 0 | 48 | DONE | [grid](sweep_grids\cfgI6A_run3.html) |
 | cfgR5-01 r5 (OFF/2/95) | OFF/2/95 | 3 | 2 | 20 | 0 | 0 | 42 | DONE | [grid](sweep_grids\cfgR5-01_run5.html) |
 | cfgR5-01 r4 (OFF/2/95) | OFF/2/95 | 1 | 8 | 16 | 0 | 0 | 41 | DONE | [grid](sweep_grids\cfgR5-01_run4.html) |
 | cfgR5-01 r3 (OFF/2/95) | OFF/2/95 | 0 | 8 | 17 | 0 | 0 | 40 | DONE | [grid](sweep_grids\cfgR5-01_run3.html) |

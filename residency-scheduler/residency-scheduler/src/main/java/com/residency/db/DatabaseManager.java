@@ -331,7 +331,113 @@ public class DatabaseManager {
                 new_seed_id  TEXT,
                 worker_count INTEGER
             )""",
-            "CREATE INDEX IF NOT EXISTS idx_collruns_year ON phase0_collection_runs(year, run_at)"
+            "CREATE INDEX IF NOT EXISTS idx_collruns_year ON phase0_collection_runs(year, run_at)",
+            // ─── Real-solve rich data layer (mirrors the phase0_collection_runs discipline one
+            //     layer up: one durable, never-overwritten row per REAL solve, cumulative).
+            //     New tables only — the legacy schedule_versions / sweep_results.csv are untouched.
+            //     data_epoch is the separation key (e.g. 'post_fix_seeded') so old (pre-I1) and new
+            //     runs are filterable without migrating legacy data. See plan: "Phase 2 — Maximal
+            //     per-run data layer". ────────────────────────────────────────────────────────────
+            //   solve_runs   : headline row per real solve — config snapshot, seed link, per-phase
+            //                  timings+status, headline tier scores, link to the saved schedule.
+            //   config_json  : full self-describing config snapshot (floor/target/weights/tiers/
+            //                  budget) so a row's meaning is reconstructable forever.
+            //   seed_id      : FK→phase0_seed_stats (NULL for a cold run); the join key that lets
+            //                  ICC ask "does the starting seed predict final quality?".
+            //   version_id   : FK→schedule_versions, linking the rich row to the saved schedule.
+            //   git_commit   : HEAD at solve time, so a row is reproducible.
+            //   backfilled   : 1 iff reconstructed from legacy sweep_results.csv (best-effort).
+            """
+            CREATE TABLE IF NOT EXISTS solve_runs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                year            INTEGER NOT NULL,
+                run_at          TEXT NOT NULL,
+                git_commit      TEXT,
+                data_epoch      TEXT NOT NULL DEFAULT 'post_fix_seeded',
+                backfilled      INTEGER NOT NULL DEFAULT 0,
+                config_label    TEXT,
+                config_hash     TEXT,
+                config_json     TEXT,
+                seed_id         TEXT,
+                seed_select_mode TEXT,
+                worker_count    INTEGER,
+                p0_secs         REAL,
+                p1_secs         REAL,
+                p2_secs         REAL,
+                p3_secs         REAL,
+                p0_status       TEXT,
+                p1_status       TEXT,
+                p2_status       TEXT,
+                p3_status       TEXT,
+                tier1_score     INTEGER,
+                tier2_score     INTEGER,
+                tier3_score     INTEGER,
+                feasible        INTEGER,
+                -- 3-state intake status for the schedule-search methodology (lower=better objective):
+                --   'PHASE3_FEASIBLE' = real Phase-3 search committed (enters ranking)
+                --   'PHASE2_FALLBACK' = Phase 3 UNKNOWN/0 incumbents → committed Phase-2 (parked, NOT ranked)
+                --   'PHASE3_OPTIMAL'  = Phase 3 proved optimal (flagged; usable if rare, watch for frozen/high-pin)
+                run_status      TEXT,
+                -- The run's ranking key: final Phase-3 objective (last trajectory incumbent). NULL — not 0 —
+                -- for PHASE2_FALLBACK, so an absent objective is honestly distinguishable from a real zero.
+                final_objective REAL,
+                version_id      INTEGER
+            )""",
+            "ALTER TABLE solve_runs ADD COLUMN run_status TEXT",
+            "ALTER TABLE solve_runs ADD COLUMN final_objective REAL",
+            "CREATE INDEX IF NOT EXISTS idx_solve_runs_status ON solve_runs(run_status, data_epoch)",
+            "CREATE INDEX IF NOT EXISTS idx_solve_runs_epoch ON solve_runs(data_epoch, year, run_at)",
+            "CREATE INDEX IF NOT EXISTS idx_solve_runs_seed ON solve_runs(seed_id)",
+            "CREATE INDEX IF NOT EXISTS idx_solve_runs_config ON solve_runs(config_label, config_hash)",
+            //   solve_run_metrics : maximal sub-component breakdown, one row per run (wide). Sourced
+            //                       from SolutionScoreReporter so the stored numbers == the solver's
+            //                       internal Tier scores (the three-way-agreement invariant).
+            //     Tier-1 : post-call primary / secondary / inpatient-split.
+            //     Tier-2 : undercoverage(α) / overcoverage(β) / variance(γ) / pgy-imbalance(δ).
+            //     Tier-3 : 4+2 pattern(ε) / sunday-coverage shortfall(ζ) / categorical-soft-excess(η).
+            //     Reporting : volunteer / fragile / healthy / heavy_heavy / runs_gt6wk
+            //                 + saturday_coverage (the new scored metric, Phase 4).
+            """
+            CREATE TABLE IF NOT EXISTS solve_run_metrics (
+                run_id              INTEGER PRIMARY KEY REFERENCES solve_runs(id) ON DELETE CASCADE,
+                t1_postcall_primary   INTEGER,
+                t1_postcall_secondary INTEGER,
+                t1_inpatient_split    INTEGER,
+                t2_undercoverage    INTEGER,
+                t2_overcoverage     INTEGER,
+                t2_variance         INTEGER,
+                t2_pgy_imbalance    INTEGER,
+                t3_pattern_4plus2   INTEGER,
+                t3_sunday_shortfall INTEGER,
+                t3_categorical_soft INTEGER,
+                volunteer           INTEGER,
+                fragile             INTEGER,
+                healthy             INTEGER,
+                heavy_heavy         INTEGER,
+                runs_gt6wk          INTEGER,
+                saturday_coverage   INTEGER
+            )""",
+            //   solve_run_weekend : the full per-weekend coverer vector (one row per weekend per run),
+            //                       so the distribution — not just fragile/healthy counts — is stored.
+            """
+            CREATE TABLE IF NOT EXISTS solve_run_weekend (
+                run_id          INTEGER NOT NULL REFERENCES solve_runs(id) ON DELETE CASCADE,
+                weekend_index   INTEGER NOT NULL,
+                coverers        INTEGER NOT NULL,
+                PRIMARY KEY (run_id, weekend_index)
+            )""",
+            //   solve_run_trajectory : full Phase-3 objective-vs-time in-DB (one row per incumbent),
+            //                          mirroring the SOLVE_TRAJECTORY_CSV columns so trajectories are
+            //                          queryable and never lost to a cleaned sweep_runs/ dir.
+            """
+            CREATE TABLE IF NOT EXISTS solve_run_trajectory (
+                run_id          INTEGER NOT NULL REFERENCES solve_runs(id) ON DELETE CASCADE,
+                elapsed_s       REAL NOT NULL,
+                objective       REAL,
+                best_bound      REAL,
+                cpsat_wall_s    REAL,
+                PRIMARY KEY (run_id, elapsed_s)
+            )"""
         };
         try (Statement stmt = connection.createStatement()) {
             for (String sql : migrations) {

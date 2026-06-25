@@ -39,7 +39,10 @@ GRID_DIR = os.path.join(ROOT, 'sweep_grids')
 RUNS_DIR = os.path.join(ROOT, 'sweep_runs')
 BACKUP_DIR = os.path.join(ROOT, 'backups')
 
-REQUIRED_BRANCH = 'feature/solver-trajectory-capture'
+# Branches known to carry the TrajectoryCallback + seed-wiring code. main now has both (merged),
+# and main is where the default-path seed warm-start + the probing-crash fix live, so the sweep MUST
+# run there. The TRAJ_CLASS check below independently verifies the compiled artifact regardless.
+REQUIRED_BRANCHES = {'feature/solver-trajectory-capture', 'main'}
 TRAJ_CLASS = os.path.join(ROOT, 'target', 'classes', 'com', 'residency', 'cpsat',
                           'CpSatSchedulerEngine$TrajectoryCallback.class')
 HEAVY_IDS = '1,3,6,11,14,16'
@@ -371,9 +374,9 @@ def preflight() -> None:
                    f'the master DB. Refusing to start a concurrent solve (corruption risk). '
                    f'Wait for it to finish or stop it, then restart the sweep.')
     br = current_branch()
-    if br != REQUIRED_BRANCH:
-        raise Halt(f'on branch {br!r}, need {REQUIRED_BRANCH!r} (trajectory capture). '
-                   f'Checkout the branch and restart.')
+    if br not in REQUIRED_BRANCHES:
+        raise Halt(f'on branch {br!r}, need one of {sorted(REQUIRED_BRANCHES)} (trajectory capture '
+                   f'+ seed-wiring). Checkout one and restart.')
     if not os.path.exists(TRAJ_CLASS):
         raise Halt('compiled TrajectoryCallback artifact missing (target/classes/.../'
                    'CpSatSchedulerEngine$TrajectoryCallback.class). Run mvn compile on '
@@ -517,9 +520,13 @@ def is_valid(metrics) -> bool:
             and metrics['traj_rows'] > 0)
 
 
-def score_and_snapshot(name, notes, dry=False):
+def score_and_snapshot(name, notes, unit=None, dry=False):
     """Run score_and_snapshot.py; return (version_id, scores dict). Idempotent: if a
-    version with this exact name already exists, adopt it and skip re-snapshotting."""
+    version with this exact name already exists, adopt it and skip re-snapshotting.
+
+    When `unit` is given, also passes the rich-telemetry args so score_and_snapshot writes
+    the solve_runs family (config_label / solve-log / trajectory CSV). The Python side skips
+    those tables non-fatally if they aren't migrated yet, so this is always safe to pass."""
     existing = None if dry else version_id_by_name(name)
     if existing is not None:
         log(f'version named {name!r} already exists (id {existing}); adopting, not re-snapshotting')
@@ -528,9 +535,11 @@ def score_and_snapshot(name, notes, dry=False):
     if dry:
         log(f'WOULD score+snapshot --name {name!r}')
         return None, {}
-    out = subprocess.check_output(
-        [sys.executable, 'score_and_snapshot.py', '--name', name, '--notes', notes],
-        cwd=ROOT, text=True)
+    cmd = [sys.executable, 'score_and_snapshot.py', '--name', name, '--notes', notes]
+    if unit is not None:
+        cmd += ['--config-label', unit['label'], '--data-epoch', 'post_fix_seeded',
+                '--solve-log', unit['log'], '--traj-csv', unit['traj']]
+    out = subprocess.check_output(cmd, cwd=ROOT, text=True)
     print(out, flush=True)
     scores, vid = {}, None
     for line in out.splitlines():
@@ -749,7 +758,7 @@ def run_unit(unit, state, units, queue_errors, run_counter, dry=False) -> str:
         name = unit['version_name'] + ' PHASE2-FALLBACK'
         notes = (f'autosweep INVALID (tier1={m["tier1"]} phase3={m["phase3"]} '
                  f'traj_rows={m["traj_rows"]}); fallback, not a real result')
-    version, scores = score_and_snapshot(name, notes)
+    version, scores = score_and_snapshot(name, notes, unit=unit)
     status = 'DONE' if valid else 'FAILED'
 
     # record state ATOMICALLY with the version id (closes double-snapshot window)

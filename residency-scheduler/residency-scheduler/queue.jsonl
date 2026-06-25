@@ -32,6 +32,19 @@
 # Budget [900,600,600,4000]: P1/P2 raised to 600s (per user); P3 ALWAYS runs the full
 #   4000s to reach the late-cascade plateau -> honest fragile numbers. ~97-107 min/run.
 #   9 runs ~= 14.5h typical (up to ~16h worst-case). Driver idles 300s between runs.
-{"label":"cfgR6-01","floor":false,"target":2,"weight":95,"runs":3,"budget":[900,600,600,4000]}
-{"label":"cfgR6-02","floor":false,"target":2,"weight":110,"runs":3,"budget":[900,600,600,4000]}
-{"label":"cfgR6-03","floor":false,"target":2,"weight":120,"runs":3,"budget":[900,600,600,4000]}
+# R6 lines below are SUPERSEDED by the item-6 A/B batch (seed-wired budgets). Kept, commented,
+# for history; also preserved verbatim in queue.jsonl.bak_preItem6. Their [900,600,600,4000]
+# budget is obsolete now that seed-wiring collapses P0-P2 to seconds.
+# {"label":"cfgR6-01","floor":false,"target":2,"weight":95,"runs":3,"budget":[900,600,600,4000]}
+# {"label":"cfgR6-02","floor":false,"target":2,"weight":110,"runs":3,"budget":[900,600,600,4000]}
+# {"label":"cfgR6-03","floor":false,"target":2,"weight":120,"runs":3,"budget":[900,600,600,4000]}
+#
+# ── ITEM 6 (post-I1 empirical re-weighting) A/B, 2026-06-24 ──────────────────────────
+# Open question per the R6 design: within the known-good band (floor OFF, target 2), which
+# weight wins POST-I1? Compare A=w95 vs B=w120, 5 seeded runs each, then:
+#   python analyze_config_compare.py cfgI6A cfgI6B
+# (target=3 and floor-ON are CLOSED per the config-designer's R6 notes — not re-litigated here.)
+# Seed-appropriate budget: P0/P1/P2 generous vs the 3-8s observed; P3=300 (~5 min) to see if
+# Phase 3 improves at all. ~10 runs x ~6 min ~= 1 hr (driver idles 300s between runs).
+{"label":"cfgI6A","floor":false,"target":2,"weight":95,"runs":5,"budget":[60,90,90,300]}
+{"label":"cfgI6B","floor":false,"target":2,"weight":120,"runs":5,"budget":[60,90,90,300]}

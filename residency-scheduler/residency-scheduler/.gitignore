@@ -26,6 +26,12 @@ sweep_runs/
 sweep_grids/
 sweep_results.csv
 sweep_state.json
+harvest_runs/
+harvest_results.csv
+harvest_state.json
+harvest.lock
+sweep.lock
+HARVEST_STATUS.md
 shakedown_results_*/
 schedules/
 traj_*.csv

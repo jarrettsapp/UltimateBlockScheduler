@@ -414,6 +414,210 @@ public class SolutionScoreReporter {
         return sb.toString();
     }
 
+    /**
+     * Structured sub-component breakdown — the same analytic numbers {@link #buildReport} prints,
+     * exposed as fields so the data layer ({@code solve_run_metrics}) can persist them. Storing
+     * these guarantees the stored numbers == the solver's internal Tier scores (the three-way
+     * agreement invariant), instead of re-deriving in Python.
+     *
+     * <p>Scope: this reporter computes the Tier-1 trio and the α/β/γ/δ/ε terms analytically, so
+     * those fields are always populated. The ζ (Sunday shortfall), η (categorical-soft excess) and
+     * the eligibility-based reporting metrics (volunteer/fragile/healthy/heavy→heavy/runs>6wk) are
+     * sourced separately ({@code score_and_snapshot.py}); they are not set here. {@code saturdayY7}
+     * is the new Phase-4 scored metric, computed here when the Saturday-source config is present.
+     */
+    public static class ScoreBreakdown {
+        // Tier-1 sub-components (raw counts, pre-weight).
+        public int t1PostcallPrimary, t1PostcallSecondary, t1InpatientSplit;
+        public long tier1Score;                 // weighted, == solver Tier-1
+        // Tier-2 / Tier-3 weighted sub-components (== ObjectiveFunctionBuilder terms).
+        public long undercoverage, overcoverage, variance, pgyImbalance, pattern4plus2;
+        public long grandTotal;                 // α+β+γ+δ+ε weighted sum
+        // Phase-4 new scored metric: Saturday Y7 coverage (count of covered Saturdays). -1 = N/A.
+        public int saturdayY7 = -1;
+    }
+
+    /**
+     * Recomputes the analytic sub-components (no printing) and returns them structurally. Mirrors
+     * {@link #buildReport}'s arithmetic exactly so the persisted numbers match the printed report
+     * and the solver's internal Tier scores. Returns null for an infeasible solution.
+     */
+    public ScoreBreakdown computeBreakdown(ScheduleSolution solution,
+                                           List<Resident> residents,
+                                           List<Rotation> rotations) {
+        if (!solution.isFeasible()) return null;
+
+        Map<Integer, Map<Integer, List<Integer>>> assigned = new HashMap<>();
+        for (Resident r : residents) {
+            Map<Integer, List<Integer>> byRot = new HashMap<>();
+            for (Rotation s : rotations) {
+                List<Integer> blks = new ArrayList<>(solution.getAssignedWeeks(r.getId(), s.getId()));
+                if (!blks.isEmpty()) { Collections.sort(blks); byRot.put(s.getId(), blks); }
+            }
+            assigned.put(r.getId(), byRot);
+        }
+
+        Set<Integer> inpatientIds = rotations.stream()
+            .filter(r -> r.getRotationType() == RotationType.INPATIENT)
+            .map(Rotation::getId).collect(Collectors.toSet());
+        Set<Integer> outpatientIds = rotations.stream()
+            .filter(r -> r.getRotationType() == RotationType.OUTPATIENT)
+            .map(Rotation::getId).collect(Collectors.toSet());
+
+        ScoreBreakdown bd = new ScoreBreakdown();
+
+        // α: undercoverage (aux credited) — mirrors buildReport lines 66–84.
+        long totalUnder = 0;
+        for (Rotation s : rotations) {
+            ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
+            if (policy.minPerBlock <= 0) continue;
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
+            long rawBlocks = 0;
+            for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMin = Math.max(0, policy.minPerBlock - auxByBlock.getOrDefault(b, 0));
+                if (effectiveMin <= 0) continue;
+                int coverage = 0;
+                for (Resident r : residents)
+                    if (assigned.get(r.getId()).getOrDefault(s.getId(), List.of()).contains(b)) coverage++;
+                rawBlocks += Math.max(0, effectiveMin - coverage);
+            }
+            totalUnder += rawBlocks * config.getWeightUndercoverage();
+        }
+
+        // β: overcoverage (aux credited).
+        long totalOver = 0;
+        for (Rotation s : rotations) {
+            ScheduleConfig.RotationPolicy policy = config.getPolicyFor(s.getId());
+            Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
+            long rawBlocks = 0;
+            for (int b = 0; b < totalBlocks; b++) {
+                int effectiveMax = Math.max(0, policy.maxPerBlock - auxByBlock.getOrDefault(b, 0));
+                int coverage = 0;
+                for (Resident r : residents)
+                    if (assigned.get(r.getId()).getOrDefault(s.getId(), List.of()).contains(b)) coverage++;
+                rawBlocks += Math.max(0, coverage - effectiveMax);
+            }
+            totalOver += rawBlocks * config.getWeightOvercoverage();
+        }
+
+        // γ: workload variance (pairwise abs diffs).
+        long totalVariance = 0;
+        if (config.getWeightVariance() > 0 && residents.size() > 1) {
+            List<Integer> loads = new ArrayList<>();
+            for (Resident r : residents)
+                loads.add(assigned.get(r.getId()).values().stream().mapToInt(List::size).sum());
+            for (int i = 0; i < loads.size(); i++)
+                for (int j = i + 1; j < loads.size(); j++)
+                    totalVariance += (long) Math.abs(loads.get(i) - loads.get(j)) * config.getWeightVariance();
+        }
+
+        // δ: PGY imbalance.
+        long totalPgyImbalance = 0;
+        if (config.getWeightPgyImbalance() > 0) {
+            Map<Integer, List<Resident>> byPgy = new LinkedHashMap<>();
+            for (Resident r : residents) byPgy.computeIfAbsent(r.getPgyLevel(), k -> new ArrayList<>()).add(r);
+            List<Integer> pgyLevels = new ArrayList<>(byPgy.keySet());
+            for (Rotation s : rotations) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    List<Integer> pgyCounts = new ArrayList<>();
+                    for (int pgy : pgyLevels) {
+                        int cnt = 0;
+                        for (Resident r : byPgy.get(pgy))
+                            if (assigned.get(r.getId()).getOrDefault(s.getId(), List.of()).contains(b)) cnt++;
+                        pgyCounts.add(cnt);
+                    }
+                    for (int i = 0; i < pgyCounts.size(); i++)
+                        for (int j = i + 1; j < pgyCounts.size(); j++)
+                            totalPgyImbalance += (long) Math.abs(pgyCounts.get(i) - pgyCounts.get(j)) * config.getWeightPgyImbalance();
+                }
+            }
+        }
+
+        // ε: 2+1 pattern (Tier 3).
+        long totalPattern = 0;
+        if (config.getWeightFourPlusTwo() > 0) {
+            for (Resident r : residents) {
+                for (int b = 0; b < totalBlocks; b++) {
+                    int pos = b % 3;
+                    Set<Integer> wrong = pos < 2 ? outpatientIds : inpatientIds;
+                    for (int rotId : wrong)
+                        if (assigned.get(r.getId()).getOrDefault(rotId, List.of()).contains(b))
+                            totalPattern += config.getWeightFourPlusTwo();
+                }
+            }
+        }
+
+        // Tier-1 trio — mirrors buildReport lines 211–286.
+        int postCallHard = 0, postCallSoft = 0, inpTransitions = 0;
+        for (Resident r : residents) {
+            Map<Integer, List<Integer>> byRot = assigned.get(r.getId());
+            for (int t = 0; t + 1 < totalBlocks; t++) {
+                for (int triggerId : config.getPostCallTriggerRotationIds()) {
+                    if (!byRot.getOrDefault(triggerId, List.of()).contains(t)) continue;
+                    for (int mandId : config.getMandatoryAttendanceRotationIds())
+                        if (byRot.getOrDefault(mandId, List.of()).contains(t + 1)) postCallHard++;
+                    for (int discId : config.getDiscouragedAfterTriggerIds())
+                        if (byRot.getOrDefault(discId, List.of()).contains(t + 1)) postCallSoft++;
+                }
+            }
+        }
+        List<Integer> inpList = new ArrayList<>(inpatientIds);
+        for (Resident r : residents) {
+            Map<Integer, List<Integer>> byRot = assigned.get(r.getId());
+            for (int t = 1; t < totalBlocks; t++) {
+                Integer before = null, after = null;
+                for (int sid : inpList) {
+                    List<Integer> b = byRot.getOrDefault(sid, List.of());
+                    if (b.contains(t - 1)) before = sid;
+                    if (b.contains(t))     after  = sid;
+                }
+                if (before != null && after != null && !before.equals(after)) inpTransitions++;
+            }
+        }
+
+        bd.t1PostcallPrimary   = postCallHard;
+        bd.t1PostcallSecondary = postCallSoft;
+        bd.t1InpatientSplit    = inpTransitions;
+        bd.tier1Score =
+              (long) postCallHard   * config.getWeightPostCallHard()
+            + (long) postCallSoft   * config.getWeightPostCallSoft()
+            + (long) inpTransitions * config.getWeightInpatientSplit();
+        bd.undercoverage = totalUnder;
+        bd.overcoverage  = totalOver;
+        bd.variance      = totalVariance;
+        bd.pgyImbalance  = totalPgyImbalance;
+        bd.pattern4plus2 = totalPattern;
+        bd.grandTotal    = totalUnder + totalOver + totalVariance + totalPgyImbalance + totalPattern;
+        bd.saturdayY7    = computeSaturdayY7Coverage(assigned, rotations);
+        return bd;
+    }
+
+    /**
+     * Phase-4 NEW scored metric: count of Saturdays with Younker-7 Days coverage. A Y7-Days
+     * resident in a block covers that block's Saturday; this counts blocks (Saturdays) with ≥1
+     * Y7-Days resident assigned. Returns -1 if no Y7-Days rotation is configured (metric N/A), so
+     * the column is honest about "not applicable" vs "zero covered". The Saturday floor (22/26)
+     * is informational; storing the count lets it become a scored target later without re-derivation.
+     */
+    private int computeSaturdayY7Coverage(Map<Integer, Map<Integer, List<Integer>>> assigned,
+                                          List<Rotation> rotations) {
+        Set<Integer> y7DayIds = rotations.stream()
+            .filter(r -> r.getName() != null && r.getName().equalsIgnoreCase("Younker 7 Days"))
+            .map(Rotation::getId).collect(Collectors.toSet());
+        if (y7DayIds.isEmpty()) return -1;
+        int covered = 0;
+        for (int b = 0; b < totalBlocks; b++) {
+            boolean any = false;
+            for (Map<Integer, List<Integer>> byRot : assigned.values()) {
+                for (int id : y7DayIds)
+                    if (byRot.getOrDefault(id, List.of()).contains(b)) { any = true; break; }
+                if (any) break;
+            }
+            if (any) covered++;
+        }
+        return covered;
+    }
+
     /** Returns the length of the longest contiguous run in a sorted list of block indices. */
     private static int longestRun(List<Integer> sorted) {
         if (sorted.isEmpty()) return 0;
