@@ -486,8 +486,14 @@ def run_harvest_unit(unit: dict, dry: bool = False) -> tuple[str, dict]:
                         seed_id = tok
 
     valid = bool(feasible) and tier1 == 0
-    name  = f'pipeline-harvest-{unit["uid"]} ({"OK" if valid else "INVALID"})'
-    notes = (f'pipeline Stage-2 harvest; seed={seed_id}; '
+    # Name the snapshot by the SEED, not the run index. The run index (harvest-rNNNN)
+    # resets whenever pipeline_state.json is fresh, so it collides with a prior batch's
+    # names — score_and_snapshot then ADOPTS the old version (id 1-5) instead of creating
+    # a new one, and Stage 3's dedup rejects all of them. The pinned seed is unique per
+    # harvest (each unused seed is harvested once), so it yields a genuinely new version.
+    seed_tag = (seed_id or unit.get('pin_seed') or unit['uid'])[:8]
+    name  = f'pipeline-harvest-{seed_tag} ({"OK" if valid else "INVALID"})'
+    notes = (f'pipeline Stage-2 harvest; uid={unit["uid"]}; seed={seed_id}; '
              + ('feasible Tier-1=0' if valid else f'INVALID feasible={feasible} tier1={tier1}'))
 
     version, scores = sw.score_and_snapshot(name, notes, unit=unit)
