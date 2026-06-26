@@ -35,6 +35,14 @@ public class ResidentBlockAssignment {
     /** rotationId -> max simultaneous residents per block (capacity) */
     private Map<Integer, Integer> maxResidentsPerBlock  = Collections.emptyMap();
 
+    /**
+     * Shared immutable facts for the ported feasibility model (config, aux coverage, tiers,
+     * eligibility, rules). Every entity references the SAME instance so the
+     * {@link RotationFeasibilityConstraintProvider} can read config off any row. Null when the
+     * legacy {@link RotationConstraintProvider} is used.
+     */
+    private TimefoldFacts tfFacts;
+
     public ResidentBlockAssignment() {}
 
     public ResidentBlockAssignment(int residentId, String residentName, int pgyLevel,
@@ -93,6 +101,9 @@ public class ResidentBlockAssignment {
     public void setEligibleRotationIds(Set<Integer> v)             { this.eligibleRotationIds = v; }
     public Map<Integer, Integer> getMaxResidentsPerBlock()         { return maxResidentsPerBlock; }
     public void setMaxResidentsPerBlock(Map<Integer, Integer> v)   { this.maxResidentsPerBlock = v; }
+
+    public TimefoldFacts getTfFacts()                              { return tfFacts; }
+    public void setTfFacts(TimefoldFacts v)                        { this.tfFacts = v; }
 
     @Override
     public String toString() {

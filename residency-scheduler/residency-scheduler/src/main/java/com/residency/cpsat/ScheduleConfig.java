@@ -36,6 +36,23 @@ public class ScheduleConfig {
     private int weightSundayCoverage = 150;
     /** Target number of eligible Sunday coverers per weekend; shortfall below this is penalized. */
     private int sundayCoverageTarget = 2;
+
+    // ── Graded Sunday-coverage objective (Timefold soft; see RotationFeasibilityConstraintProvider) ──
+    // When weightVolunteerWeekend > 0 the solver uses a TIERED per-weekend objective instead of the flat
+    // shortfall term. PRIORITY (user-confirmed 2026-06-25): FRAGILE is the worst case, not volunteer —
+    // a volunteer weekend is honestly uncovered (staffed on purpose), but a fragile weekend looks
+    // covered yet its lone eligible resident may silently fall through (vacation / already overloaded),
+    // a hidden single point of failure. So FRAGILE ≫ volunteer: drive fragile toward 0 first, then see
+    // the remaining volunteer/healthy split. Depth reward stays a small tiebreaker that can never
+    // outweigh fixing a fragile (or volunteer) weekend.
+    /** Penalty for a volunteer (zero-coverer) weekend. 0 ⇒ fall back to the flat shortfall term. */
+    private int weightVolunteerWeekend = 0;
+    /** Penalty for a fragile (single-coverer) weekend — the PRIMARY target, ≫ volunteer. */
+    private int weightFragileWeekend = 1000;
+    /** Reward for reaching healthy (>=2 coverers): Rbase per healthy weekend. */
+    private int weightHealthyWeekend = 10;
+    /** Per-extra-coverer reward beyond 2 (3rd, 4th, …): the depth tiebreaker. */
+    private int weightHealthyDepthReward = 3;
     /**
      * Penalty per categorical resident assigned beyond a rotation's
      * {@link RotationPolicy#categoricalSoftCap}, per block (Tier-3 soft objective). Lets a
@@ -98,6 +115,14 @@ public class ScheduleConfig {
     // be on (Inpatient GI / ID / any light rotation).
     private Set<Integer> heavyRotationIds = new HashSet<>();
     private Set<Integer> sundaySourceRotationIds = new HashSet<>();
+
+    // Rotations whose per-block coverage MIN is enforced softly (undercoverage objective)
+    // with a hard GLOBAL floor on total categorical occupancy instead of a hard per-block
+    // floor. For rotations whose 1/block demand exceeds categorical supply but where aux
+    // (TY) fill the few floating gaps — e.g. Younker 8 Pulmonology (26 demand, 22 categorical
+    // supply, 2 BMC static, 2 TY). Map: rotationId -> min total categorical occupancy/year.
+    // Transient (computed at model-build), not persisted.
+    private Map<Integer, Integer> categoricalGlobalFloors = new HashMap<>();
 
     // ── Per-rotation overrides ─────────────────────────────────────────────
     private Map<Integer, RotationPolicy> rotationPolicies = new HashMap<>();
@@ -219,6 +244,15 @@ public class ScheduleConfig {
     public int getSundayCoverageTarget()             { return sundayCoverageTarget; }
     public void setSundayCoverageTarget(int v)       { this.sundayCoverageTarget = v; }
 
+    public int getWeightVolunteerWeekend()           { return weightVolunteerWeekend; }
+    public void setWeightVolunteerWeekend(int v)     { this.weightVolunteerWeekend = v; }
+    public int getWeightFragileWeekend()             { return weightFragileWeekend; }
+    public void setWeightFragileWeekend(int v)       { this.weightFragileWeekend = v; }
+    public int getWeightHealthyWeekend()             { return weightHealthyWeekend; }
+    public void setWeightHealthyWeekend(int v)       { this.weightHealthyWeekend = v; }
+    public int getWeightHealthyDepthReward()         { return weightHealthyDepthReward; }
+    public void setWeightHealthyDepthReward(int v)   { this.weightHealthyDepthReward = v; }
+
     public int getWeightCategoricalSoftExcess()      { return weightCategoricalSoftExcess; }
     public void setWeightCategoricalSoftExcess(int v) { this.weightCategoricalSoftExcess = v; }
 
@@ -239,6 +273,9 @@ public class ScheduleConfig {
 
     public Set<Integer> getSundaySourceRotationIds()       { return sundaySourceRotationIds; }
     public void setSundaySourceRotationIds(Set<Integer> v) { this.sundaySourceRotationIds = v; }
+
+    public Map<Integer, Integer> getCategoricalGlobalFloors()        { return categoricalGlobalFloors; }
+    public void setCategoricalGlobalFloors(Map<Integer, Integer> v)  { this.categoricalGlobalFloors = (v == null) ? new HashMap<>() : v; }
 
     public Set<Integer> getPostCallTriggerRotationIds()        { return postCallTriggerRotationIds; }
     public void setPostCallTriggerRotationIds(Set<Integer> v)  { this.postCallTriggerRotationIds = v; }

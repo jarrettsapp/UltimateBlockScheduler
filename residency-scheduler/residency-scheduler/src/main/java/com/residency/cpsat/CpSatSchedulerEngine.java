@@ -314,6 +314,7 @@ public class CpSatSchedulerEngine {
         Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
             ? new HashMap<>()
             : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+        applyAuxCoverageCredits(auxCoverage, rotations, auxResidents, config, totalBlocks);
 
         ModelContext mc = buildBaseModel(residents, rotations, config, reqMap, prereqMap,
             eligibleByRotation, rotationLengths, seqMap, totalBlocks, auxCoverage);
@@ -557,6 +558,7 @@ public class CpSatSchedulerEngine {
         Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
             ? new HashMap<>()
             : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+        applyAuxCoverageCredits(auxCoverage, rotations, auxResidents, config, totalBlocks);
 
         // Younker 7 Days coverage model (real-world rule): EXACTLY 2 bodies per block.
         // This is NOT enforced as a solver coverage floor — doing so is infeasible, because
@@ -1973,6 +1975,7 @@ public class CpSatSchedulerEngine {
         Map<Integer, Map<Integer, Integer>> auxCoverage = auxIds.isEmpty()
             ? new HashMap<>()
             : new HashMap<>(assignmentDAO.getAuxiliaryCoverage(auxIds, year, fillerExclusions));
+        applyAuxCoverageCredits(auxCoverage, rotations, auxResidents, config, totalBlocks);
 
         List<Map<String, Long>> pool = loadCachedFeasiblePool(year);
         StringBuilder rpt = new StringBuilder();
@@ -2539,6 +2542,23 @@ public class CpSatSchedulerEngine {
             }
         }
         return exclusions;
+    }
+
+    /**
+     * Applies the shared synthetic aux-coverage credits (VA + Younker-8-Pulm BMC static) and
+     * registers the Y8Pulm global categorical floor on {@code config}. Delegates to
+     * {@link AuxCoverageCredits} so CP-SAT and Timefold stay identical. See that class for the
+     * full rule rationale.
+     */
+    private void applyAuxCoverageCredits(Map<Integer, Map<Integer, Integer>> auxCoverage,
+                                  List<Rotation> rotations, List<Resident> auxResidents,
+                                  ScheduleConfig config, int totalBlocks) {
+        AuxCoverageCredits.applyPerBlockCredits(auxCoverage, rotations, auxResidents, config, totalBlocks);
+        int floor = AuxCoverageCredits.younker8CategoricalFloor(rotations, auxResidents, config, totalBlocks);
+        Integer y8Id = AuxCoverageCredits.younker8RotationId(rotations);
+        if (y8Id != null && floor >= 0) {
+            config.getCategoricalGlobalFloors().put(y8Id, floor);
+        }
     }
 
     private ScheduleSolution aborted(FeasibilityReport report) {

@@ -46,6 +46,14 @@ __pycache__/
 
 # ── Generated reports / one-off PDFs ──────────────────────────
 schedule_run*.pdf
+PRODUCTION_*.pdf
+
+# ── Pipeline runtime artifacts (generated each run, not source) ─
+pipeline_state.json*
+PIPELINE_STATUS.md
+PIPELINE_REPORT.md
+phase3_lineage*.csv
+move_bench*.csv
 
 # ── Classpath dump (machine-specific absolute paths) ──────────
 cp.txt

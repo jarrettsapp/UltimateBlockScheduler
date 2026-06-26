@@ -7,230 +7,173 @@ import java.sql.*;
 import java.util.*;
 
 /**
- * Post-solve pass: for each "filler rotation" configured per aux group,
- * assigns aux residents of that group to blocks where coverage falls below
- * minPerBlock after main residents and pre-assigned aux residents are placed.
+ * Post-solve aux-coverage pass: assigns auxiliary residents (BMC, TY) to the blocks the
+ * categoricals leave under-covered, per the real-world staffing rules. The rule logic is
+ * backend-agnostic ({@link #fillInto(AuxFillTarget)}) so the SAME passes write either to the
+ * live {@code assignments} table (post-CP-SAT-solve) or into a {@code schedule_version_assignments}
+ * snapshot (so a Timefold version is self-contained / reprintable). No rule duplication.
  *
- * BMC on Younker 7 Days is the canonical example: BMC's Younker 7 assignments
- * are cleared before this runs, then regenerated here to fill only the gaps.
+ * <p>Passes, in order (order matters — Younker-8 BMC static must precede the generic TY gap-fill):
+ * <ol>
+ *   <li>Younker 8 Pulm BMC static at blocks 11 (6A) &amp; 23 (12A) where no categorical.</li>
+ *   <li>Generic per-group filler (from {@code aux_filler_rotations}): top each rotation up to
+ *       its {@code minPerBlock} with free group members. Skips Younker 7 Days (dedicated pass).</li>
+ *   <li>Younker 7 Days team: BMC 1/block except blocks {13,14,25,26}; TY tops up to 2.</li>
+ * </ol>
  */
 public class AuxFillerService {
 
-    private final AssignmentDAO assignmentDAO;
-    private final ResidentDAO residentDAO;
     private final AuxFillerRotationDAO fillerDAO;
-    private final DatabaseManager dbMgr;
 
     public AuxFillerService() throws SQLException {
-        this.assignmentDAO = new AssignmentDAO();
-        this.residentDAO   = new ResidentDAO();
-        this.fillerDAO     = new AuxFillerRotationDAO();
-        this.dbMgr         = DatabaseManager.getInstance();
+        this.fillerDAO = new AuxFillerRotationDAO();
     }
 
     /**
-     * Runs the filler pass for all configured groups and rotations.
-     *
-     * @param year        schedule year
-     * @param blocks      ordered list of blocks for the year (block_number 1-based)
-     * @param rotations   all rotations
-     * @param config      schedule config (for minPerBlock per rotation)
-     * @param log         appended with filler activity for the solver log
+     * Legacy entry point: runs the filler against the live {@code assignments} table for a year.
+     * Delegates to {@link #fillInto(AuxFillTarget)} via a {@link AuxFillTarget.LiveTarget} so the
+     * live and version backends share one rule implementation.
      */
     public void run(int year, List<Block> blocks, List<Rotation> rotations,
                     ScheduleConfig config, StringBuilder log) throws SQLException {
+        fillInto(new AuxFillTarget.LiveTarget(year, blocks), log);
+    }
 
+    /** Convenience overload without a log sink. */
+    public int fillInto(AuxFillTarget t) throws SQLException {
+        return fillInto(t, new StringBuilder());
+    }
+
+    /**
+     * Runs all aux passes against {@code t}. Returns the number of aux bodies placed. The same
+     * code path serves the live table and a version snapshot — only {@code t} differs.
+     */
+    public int fillInto(AuxFillTarget t, StringBuilder log) throws SQLException {
         Map<String, Set<Integer>> fillerMap = fillerDAO.getAllFillerRotations();
-        if (fillerMap.isEmpty()) return;
+        if (fillerMap.isEmpty()) return 0;
 
         log.append("\n═══ AUX FILLER PASS ═══\n");
 
-        Map<Integer, Integer> blockNumberToId = new HashMap<>();
-        for (Block b : blocks) blockNumberToId.put(b.getBlockNumber(), b.getId());
-
+        List<Rotation> rotations = t.rotations();
+        ScheduleConfig config = t.config();
         Map<Integer, Rotation> rotById = new HashMap<>();
         for (Rotation r : rotations) rotById.put(r.getId(), r);
 
+        int placed = 0;
+
+        // 1) Younker 8 Pulm BMC static (must precede generic gap-fill so TY tops up only the
+        //    remaining gaps, not the BMC blocks).
+        placed += fillYounker8PulmBmc(t, rotations, log);
+
+        // 2) Generic per-group filler.
         for (Map.Entry<String, Set<Integer>> entry : fillerMap.entrySet()) {
             String group = entry.getKey();
-            Set<Integer> fillerRotationIds = entry.getValue();
-
-            List<Resident> fillerResidents = residentDAO.getByGroup(group);
+            List<Resident> fillerResidents = t.residentsInGroup(group);
             if (fillerResidents.isEmpty()) {
                 log.append(String.format("  Group '%s': no residents found, skipping.\n", group));
                 continue;
             }
+            List<Integer> fillerIds = ids(fillerResidents);
 
-            for (int rotId : fillerRotationIds) {
+            for (int rotId : entry.getValue()) {
                 Rotation rotation = rotById.get(rotId);
                 if (rotation == null) continue;
+                if ("Younker 7 Days".equalsIgnoreCase(rotation.getName())) continue; // dedicated pass
 
-                ScheduleConfig.RotationPolicy policy = config.getPolicyFor(rotId);
-                int minPerBlock = policy.minPerBlock;
-
-                // Younker 7 Days is handled by a dedicated pass below (BMC=1 + TY top-up to
-                // 2). Skip it here so the generic filler doesn't double-fill it.
-                if ("Younker 7 Days".equalsIgnoreCase(rotation.getName())) continue;
-
-                // Clear old filler assignments for this group + rotation + year
-                clearFillerAssignments(group, fillerResidents, rotId, year);
+                int minPerBlock = config.getPolicyFor(rotId).minPerBlock;
+                t.clearGroupRotation(fillerIds, rotId);
 
                 int filled = 0;
                 for (int blockNum = 1; blockNum <= 26; blockNum++) {
-                    Integer blockId = blockNumberToId.get(blockNum);
-                    if (blockId == null) continue;
-
-                    int currentCount = countAssignmentsForBlock(rotId, blockId);
-                    int needed = minPerBlock - currentCount;
-                    if (needed <= 0) continue;
-
-                    // Ordinary filler: find residents not already assigned at this block.
+                    int needed = minPerBlock - t.countAt(rotId, blockNum);
                     for (Resident filler : fillerResidents) {
                         if (needed <= 0) break;
-                        if (!hasAssignmentAtBlock(filler.getId(), blockId)) {
-                            assignmentDAO.insert(new Assignment(0, filler.getId(), rotId, blockId, false));
-                            needed--;
-                            filled++;
+                        if (t.isResidentFree(filler.getId(), blockNum)) {
+                            t.place(filler.getId(), rotId, blockNum);
+                            needed--; filled++; placed++;
                         }
                     }
                 }
-
                 log.append(String.format("  Group '%-6s' → %-35s  filled %d block(s)\n",
                     group, rotation.getName(), filled));
             }
         }
 
-        fillYounker7Days(year, blockNumberToId, rotations, log);
+        // 3) Younker 7 Days team.
+        placed += fillYounker7Days(t, rotations, log);
+        return placed;
     }
 
     /**
-     * Younker 7 Days coverage = EXACTLY 2 bodies per block, composed (per the real-world
-     * staffing) as:
-     *   • BMC: exactly ONE body on every 4-week block EXCEPT block 7 and block 13 (never 2).
-     *   • Categoricals: the solver places 1 per block on most blocks and 2 at block 13.
-     *   • TY: fills the 2nd body wherever a categorical is not placed (e.g. blocks 1,3,5 and
-     *     block 7). TY placement is variable/external, so we write a TY placeholder here so
-     *     the schedule visibly shows the full team of 2.
-     * BMC and TY are pools; a placeholder body may be written even if a named pool record is
-     * also on another rotation that block. This pass never writes a 2nd BMC on Y7 Days, and
-     * never displaces a categorical (categoricals are fixed by the solver before this runs).
+     * Younker 8 Pulm BMC static coverage: BMC supplies exactly ONE body at block 6A (blockNumber
+     * 11) and 12A (blockNumber 23), only where no categorical already covers it.
      */
-    private void fillYounker7Days(int year, Map<Integer, Integer> blockNumberToId,
-                                  List<Rotation> rotations, StringBuilder log) throws SQLException {
-        Integer y7dId = rotations.stream()
-            .filter(r -> "Younker 7 Days".equalsIgnoreCase(r.getName()))
-            .map(Rotation::getId).findFirst().orElse(null);
-        if (y7dId == null) return;
+    private int fillYounker8PulmBmc(AuxFillTarget t, List<Rotation> rotations, StringBuilder log)
+            throws SQLException {
+        Integer y8Id = rotIdByName(rotations, "Younker 8 Pulmonology");
+        if (y8Id == null) return 0;
+        List<Resident> bmc = t.residentsInGroup("BMC");
+        if (bmc.isEmpty()) return 0;
+        t.clearGroupRotation(ids(bmc), y8Id);
 
-        List<Resident> bmc = residentDAO.getByGroup("BMC");
-        List<Resident> ty  = residentDAO.getAuxiliaryNonGroup(); // TY = auxiliary, no group
+        int filled = 0;
+        for (int blockNum : new int[]{11, 23}) {
+            if (t.countAt(y8Id, blockNum) >= 1) continue; // categorical already there
+            Integer bid = pickFree(t, bmc, blockNum);
+            if (bid != null) { t.place(bid, y8Id, blockNum); filled++; }
+        }
+        log.append(String.format("  Younker 8 Pulm BMC static fill: %d block(s)\n", filled));
+        return filled;
+    }
 
-        // Clear prior BMC/TY filler on Y7 Days so this pass is idempotent.
-        if (!bmc.isEmpty()) clearFillerAssignments("BMC", bmc, y7dId, year);
-        clearResidentRotationAssignments(ty, y7dId, year);
+    /**
+     * Younker 7 Days team = 2 bodies/block: BMC supplies ONE except blocks {13,14,25,26}; TY
+     * tops up to 2 (covers no-categorical blocks and block 7).
+     */
+    private int fillYounker7Days(AuxFillTarget t, List<Rotation> rotations, StringBuilder log)
+            throws SQLException {
+        Integer y7dId = rotIdByName(rotations, "Younker 7 Days");
+        if (y7dId == null) return 0;
 
-        // BMC absent on block 7 (slots → blockNum 13,14) and block 13 (blockNum 25,26).
+        List<Resident> bmc = t.residentsInGroup("BMC");
+        List<Resident> ty  = t.residentsInGroup("TY");
+        if (!bmc.isEmpty()) t.clearGroupRotation(ids(bmc), y7dId);
+        t.clearGroupRotation(ids(ty), y7dId);
+
         Set<Integer> bmcAbsent = Set.of(13, 14, 25, 26);
         int bmcFilled = 0, tyFilled = 0;
-
         for (int blockNum = 1; blockNum <= 26; blockNum++) {
-            Integer blockId = blockNumberToId.get(blockNum);
-            if (blockId == null) continue;
-
-            // 1) BMC supplies exactly ONE body, except its absent blocks.
-            if (!bmcAbsent.contains(blockNum) && countAssignmentsForBlock(y7dId, blockId) < 2) {
-                Integer bid = pickPoolMember(bmc, blockId);
-                if (bid != null) {
-                    assignmentDAO.insert(new Assignment(0, bid, y7dId, blockId, false));
-                    bmcFilled++;
-                }
+            // 1) BMC supplies one body, except its absent blocks.
+            if (!bmcAbsent.contains(blockNum) && t.countAt(y7dId, blockNum) < 2) {
+                Integer bid = pickFree(t, bmc, blockNum);
+                if (bid != null) { t.place(bid, y7dId, blockNum); bmcFilled++; }
             }
-
-            // 2) TY tops up to 2 (covers blocks with no categorical, and block 7).
-            if (countAssignmentsForBlock(y7dId, blockId) < 2) {
-                Integer tid = pickPoolMember(ty, blockId);
-                if (tid != null) {
-                    assignmentDAO.insert(new Assignment(0, tid, y7dId, blockId, false));
-                    tyFilled++;
-                }
+            // 2) TY tops up to 2.
+            if (t.countAt(y7dId, blockNum) < 2) {
+                Integer tid = pickFree(t, ty, blockNum);
+                if (tid != null) { t.place(tid, y7dId, blockNum); tyFilled++; }
             }
         }
         log.append(String.format("  Younker 7 Days team fill: BMC %d, TY %d block(s)\n",
             bmcFilled, tyFilled));
+        return bmcFilled + tyFilled;
     }
 
-    /**
-     * Picks a pool member's id to place on {@code rotId} at {@code blockId}: returns the
-     * first member who has NO assignment at all that block (the DB enforces one assignment
-     * per resident per block via a UNIQUE(resident_id, block_id) constraint, so a record
-     * already on any rotation that block cannot take a second). Returns null if no member is
-     * free — the caller then leaves the slot unfilled rather than violating the constraint.
-     */
-    private Integer pickPoolMember(List<Resident> pool, int blockId) throws SQLException {
-        for (Resident r : pool) {
-            if (!hasAssignmentAtBlock(r.getId(), blockId)) return r.getId();
-        }
+    /** First pool member free at {@code blockNumber}, or null. */
+    private Integer pickFree(AuxFillTarget t, List<Resident> pool, int blockNumber) {
+        for (Resident r : pool) if (t.isResidentFree(r.getId(), blockNumber)) return r.getId();
         return null;
     }
 
-    private void clearFillerAssignments(String group, List<Resident> residents,
-                                         int rotId, int year) throws SQLException {
-        if (residents.isEmpty()) return;
-        String ids = residents.stream()
-            .map(r -> String.valueOf(r.getId()))
-            .collect(java.util.stream.Collectors.joining(","));
-        String sql = """
-            DELETE FROM assignments
-            WHERE rotation_id = ?
-              AND resident_id IN (%s)
-              AND block_id IN (SELECT id FROM blocks WHERE schedule_year = ?)
-            """.formatted(ids);
-        try (PreparedStatement ps = dbMgr.getValidConnection().prepareStatement(sql)) {
-            ps.setInt(1, rotId);
-            ps.setInt(2, year);
-            ps.executeUpdate();
-        }
+    private static Integer rotIdByName(List<Rotation> rotations, String name) {
+        return rotations.stream()
+            .filter(r -> name.equalsIgnoreCase(r.getName()))
+            .map(Rotation::getId).findFirst().orElse(null);
     }
 
-    private int countAssignmentsForBlock(int rotId, int blockId) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM assignments WHERE rotation_id=? AND block_id=?";
-        try (PreparedStatement ps = dbMgr.getValidConnection().prepareStatement(sql)) {
-            ps.setInt(1, rotId);
-            ps.setInt(2, blockId);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getInt(1) : 0;
-            }
-        }
-    }
-
-    private boolean hasAssignmentAtBlock(int residentId, int blockId) throws SQLException {
-        String sql = "SELECT 1 FROM assignments WHERE resident_id=? AND block_id=?";
-        try (PreparedStatement ps = dbMgr.getValidConnection().prepareStatement(sql)) {
-            ps.setInt(1, residentId);
-            ps.setInt(2, blockId);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        }
-    }
-
-    /** Clears all assignments of the given residents on one rotation for the year. */
-    private void clearResidentRotationAssignments(List<Resident> residents, int rotId, int year)
-            throws SQLException {
-        if (residents.isEmpty()) return;
-        String ids = residents.stream()
-            .map(r -> String.valueOf(r.getId()))
-            .collect(java.util.stream.Collectors.joining(","));
-        String sql = """
-            DELETE FROM assignments
-            WHERE rotation_id = ?
-              AND resident_id IN (%s)
-              AND block_id IN (SELECT id FROM blocks WHERE schedule_year = ?)
-            """.formatted(ids);
-        try (PreparedStatement ps = dbMgr.getValidConnection().prepareStatement(sql)) {
-            ps.setInt(1, rotId);
-            ps.setInt(2, year);
-            ps.executeUpdate();
-        }
+    private static List<Integer> ids(List<Resident> residents) {
+        List<Integer> out = new ArrayList<>(residents.size());
+        for (Resident r : residents) out.add(r.getId());
+        return out;
     }
 }

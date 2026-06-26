@@ -43,7 +43,14 @@ public class ConstraintBuilder {
             int minPerBlock = policy.minPerBlock;
             int maxPerBlock = policy.maxPerBlock;
             Map<Integer, Integer> auxByBlock = auxCoverage.getOrDefault(s.getId(), Map.of());
+            // Rotations with a global categorical floor have their per-block MIN enforced
+            // softly (undercoverage objective) — see categoricalGlobalFloors — so the hard
+            // per-block floor is skipped here. The hard global floor is added below. The
+            // per-block MAX is still enforced.
+            Map<Integer, Integer> globalFloors = config.getCategoricalGlobalFloors();
+            boolean softFloor = globalFloors.containsKey(s.getId());
 
+            List<BoolVar> allOccs = new ArrayList<>();
             for (int b = 0; b < totalBlocks; b++) {
                 List<BoolVar> blockOccs = new ArrayList<>();
                 for (Resident r : residents) {
@@ -51,6 +58,7 @@ public class ConstraintBuilder {
                     if (occ != null) blockOccs.add(occ);
                 }
                 if (blockOccs.isEmpty()) continue;
+                allOccs.addAll(blockOccs);
 
                 // Auxiliary residents already fill some slots; subtract from bounds.
                 int auxCount = auxByBlock.getOrDefault(b, 0);
@@ -58,10 +66,23 @@ public class ConstraintBuilder {
                 int effectiveMax = Math.max(0, maxPerBlock - auxCount);
 
                 BoolVar[] arr = blockOccs.toArray(new BoolVar[0]);
-                if (effectiveMin > 0) {
+                if (effectiveMin > 0 && !softFloor) {
                     model.addLinearConstraint(LinearExpr.sum(arr), effectiveMin, blockOccs.size());
                 }
                 model.addLinearConstraint(LinearExpr.sum(arr), 0, effectiveMax);
+            }
+
+            // Hard global floor on total categorical occupancy (replaces the per-block hard
+            // floor for soft-floor rotations like Younker 8 Pulm): the categoricals must
+            // supply at least this many slots across the year; the remaining demand is met by
+            // aux (TY) post-solve, and the undercoverage objective places the categorical
+            // slots block-by-block.
+            if (softFloor && !allOccs.isEmpty()) {
+                int floor = Math.min(globalFloors.get(s.getId()), allOccs.size());
+                if (floor > 0) {
+                    model.addLinearConstraint(
+                        LinearExpr.sum(allOccs.toArray(new BoolVar[0])), floor, allOccs.size());
+                }
             }
         }
     }

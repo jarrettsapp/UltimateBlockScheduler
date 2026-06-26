@@ -33,6 +33,18 @@ public class RotationSchedule {
     @ProblemFactProperty
     private SolverProblemFacts facts;
 
+    /**
+     * Rich immutable facts for the ported hard model + Sunday soft objective (config, aux coverage,
+     * tiers, eligibility, rules). Used by {@link RotationFeasibilityConstraintProvider}. Optional —
+     * null when running the legacy {@link RotationConstraintProvider}.
+     */
+    @ProblemFactProperty
+    private TimefoldFacts tfFacts;
+
+    /** Fixed auxiliary-resident assignments (problem facts, never planned). */
+    @ProblemFactCollectionProperty
+    private List<AuxAssignment> auxAssignments = java.util.List.of();
+
     /** One entry per (resident × required rotation) — lets constraints detect zero-assignment cases. */
     @ProblemFactCollectionProperty
     private List<ResidentRequirement> residentRequirements;
@@ -67,6 +79,12 @@ public class RotationSchedule {
 
     public SolverProblemFacts getFacts()                            { return facts; }
     public void setFacts(SolverProblemFacts v)                      { this.facts = v; }
+
+    public TimefoldFacts getTfFacts()                               { return tfFacts; }
+    public void setTfFacts(TimefoldFacts v)                         { this.tfFacts = v; }
+
+    public List<AuxAssignment> getAuxAssignments()                 { return auxAssignments; }
+    public void setAuxAssignments(List<AuxAssignment> v)           { this.auxAssignments = v; }
 
     public List<ResidentRequirement> getResidentRequirements()              { return residentRequirements; }
     public void setResidentRequirements(List<ResidentRequirement> v)        { this.residentRequirements = v; }
