@@ -141,6 +141,17 @@ def count_pool_seeds() -> int:
         con.close()
 
 
+def cache_pool_max() -> int:
+    """The hard cap on distinct Phase-0 seeds the engine will cache (PHASE0_CACHE_POOL_MAX,
+    default 25 — see CpSatSchedulerEngine.CACHE_POOL_MAX_DEFAULT). Once the pool reaches
+    this, saveCachedFeasibleHints refuses to add more, so the pool cannot grow and any
+    'generate until N unused' loop with N above the achievable ceiling would spin forever."""
+    try:
+        return max(1, int(os.environ.get('PHASE0_CACHE_POOL_MAX', '') or 25))
+    except ValueError:
+        return 25
+
+
 def pool_seed_ids() -> list[str]:
     """Return all seed_ids currently in phase0_seed_stats for year 2 (full hashes)."""
     con = sqlite3.connect(DB, timeout=10)
@@ -379,13 +390,38 @@ def stage1_seeds(state: dict, target_seeds: int, dry: bool = False) -> None:
         log(f'Already have {unused_now} >= {target_seeds} unused seeds; skipping seed generation')
         return
 
-    needed = target_seeds - unused_now
-    log(f'Will generate ~{needed} new seeds (each new seed is unused; pool may grow by more)')
+    # The engine caps the cached pool at cache_pool_max() distinct seeds. Seeds already
+    # consumed by harvest occupy slots permanently, so the MOST unused seeds we can ever
+    # reach is (cache_max - consumed). Demanding more than that would loop forever (each
+    # seed-gen 'succeeds' but the engine refuses to bank past the cap, so unused never
+    # rises). Clamp the effective target to that achievable ceiling and warn.
+    cache_max = cache_pool_max()
+    consumed  = pool_now - unused_now
+    achievable = max(0, cache_max - consumed)
+    effective_target = min(target_seeds, achievable)
+    if effective_target < target_seeds:
+        log(f'WARNING: cache pool cap is {cache_max} and {consumed} slot(s) are already '
+            f'consumed by harvest, so at most {achievable} unused seeds are reachable. '
+            f'Clamping target {target_seeds} -> {effective_target}. (Raise PHASE0_CACHE_POOL_MAX '
+            f'or harvest+advance existing seeds to free the ceiling.)')
+    if unused_now >= effective_target:
+        log(f'Already have {unused_now} unused seeds (>= achievable {effective_target}); '
+            f'nothing to generate. Proceeding with what exists.')
+        return
+
+    needed = effective_target - unused_now
+    log(f'Will generate ~{needed} new seed(s) toward {effective_target} unused.')
 
     run_idx    = max((int(k.split('-r')[1]) for k in seeds_st if '-r' in k), default=0)
     consecutive_failures = 0
+    # No-progress guard: if seed-gen keeps completing but unused does not rise (pool full /
+    # only duplicate assignments found), stop after this many barren attempts instead of
+    # spinning forever. The user's earlier run did ~56 of these.
+    no_progress = 0
+    NO_PROGRESS_LIMIT = 8
 
-    while len(unused_seeds(state)) < target_seeds:
+    while len(unused_seeds(state)) < effective_target:
+        prev_unused = len(unused_seeds(state))
         run_idx += 1
         uid   = f'seed-gen-r{run_idx:04d}'
         if seeds_st.get(uid, {}).get('status') == 'DONE':
@@ -414,8 +450,21 @@ def stage1_seeds(state: dict, target_seeds: int, dry: bool = False) -> None:
             consecutive_failures = 0
 
         if dry:
-            log(f'DRY: would keep generating until pool reaches {target_seeds}; stopping after 1')
+            log(f'DRY: would keep generating until {effective_target} unused; stopping after 1')
             break
+
+        # Track whether this attempt actually grew the unused pool.
+        if len(unused_seeds(state)) > prev_unused:
+            no_progress = 0
+        else:
+            no_progress += 1
+            if no_progress >= NO_PROGRESS_LIMIT:
+                cur = len(unused_seeds(state))
+                log(f'WARNING: {no_progress} seed-gen attempts in a row produced no new unused '
+                    f'seed (pool stuck at {count_pool_seeds()}/{cache_max}). The solver is only '
+                    f'finding already-cached assignments. Stopping seed generation with {cur} '
+                    f'unused seed(s) and proceeding to harvest those.')
+                break
 
     final_count = count_pool_seeds()
     final_unused = len(unused_seeds(state))
