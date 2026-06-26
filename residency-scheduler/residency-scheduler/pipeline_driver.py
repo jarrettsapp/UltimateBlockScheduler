@@ -141,26 +141,101 @@ def count_pool_seeds() -> int:
         con.close()
 
 
-def consumed_source_versions() -> set[int]:
-    """Phase-2 source version_ids already optimized by Timefold, per phase3_lineage.csv.
+def pool_seed_ids() -> list[str]:
+    """Return all seed_ids currently in phase0_seed_stats for year 2 (full hashes)."""
+    con = sqlite3.connect(DB, timeout=10)
+    try:
+        return [r[0] for r in con.execute(
+            "SELECT seed_id FROM phase0_seed_stats WHERE year=2 AND seed_id IS NOT NULL"
+        ).fetchall() if r[0]]
+    except Exception as e:
+        log(f'WARNING: could not list pool seed_ids: {e}')
+        return []
+    finally:
+        con.close()
 
-    The DB has no source->result link, so this ledger is the only record of which
-    Phase-2 versions were already sent to Timefold. Used to avoid re-optimizing them.
+
+def harvested_seed_ids(state: dict | None = None) -> set[str]:
+    """8-char prefixes of seeds that have already been CONSUMED by a Phase-2 harvest.
+
+    A seed is 'used' once any harvest solve has been run from it. We union two records
+    so re-runs never re-harvest a seed:
+      1. solve_runs rows with run_status='PHASE2_FALLBACK' (the DB's harvest rows), and
+      2. pipeline_state.json["harvest"] entries (covers this pipeline's own bookkeeping).
+    Compared on 8-char prefix because that is how seed_ids surface in logs/CSV/UI.
+    """
+    used: set[str] = set()
+    con = sqlite3.connect(DB, timeout=10)
+    try:
+        for r in con.execute(
+            "SELECT seed_id FROM solve_runs "
+            "WHERE run_status='PHASE2_FALLBACK' AND year=2 AND seed_id IS NOT NULL"
+        ).fetchall():
+            if r[0]:
+                used.add(r[0][:8])
+    except Exception as e:
+        log(f'WARNING: could not query harvested seed_ids from DB: {e}')
+    finally:
+        con.close()
+
+    st = state if state is not None else (load_state() if os.path.exists(STATE) else {})
+    for rec in (st.get('harvest') or {}).values():
+        sid = (rec.get('seed_id') or '')[:8]
+        if sid:
+            used.add(sid)
+    return used
+
+
+def unused_seeds(state: dict | None = None) -> list[str]:
+    """Pool seeds (full hashes) that have NOT yet been consumed by a Phase-2 harvest.
+
+    These are the seeds a fresh 'run N seeds' request should draw from: harvest pins
+    each one explicitly so no seed is ever harvested twice. Sorted for determinism.
+    """
+    used = harvested_seed_ids(state)
+    return sorted(sid for sid in pool_seed_ids() if sid[:8] not in used)
+
+
+def consumed_source_versions(state: dict | None = None) -> set[int]:
+    """Phase-2 source version_ids already optimized by Timefold.
+
+    The DB stores only the NEW optimized version, never which Phase-2 version it
+    came from, so 'which P2 runs were already optimized' lives only in the pipeline
+    bookkeeping. Two records hold it and they can drift, so we read BOTH and union:
+
+      1. pipeline_state.json["phase3"] — authoritative (every entry has src_version_id),
+         written atomically as each Timefold run completes.
+      2. phase3_lineage.csv — a derived export of the same links.
+
+    Sourcing from state (not the CSV alone) means a missing/empty/stale CSV can never
+    silently mark an already-optimized version as "fresh" and re-optimize it. Callers
+    pass the loaded state; if omitted we load it. Used to avoid re-optimizing sources.
     """
     used: set[int] = set()
-    if not os.path.exists(LINEAGE_CSV):
-        return used
-    try:
-        with open(LINEAGE_CSV, newline='', encoding='utf-8') as f:
-            for row in csv.DictReader(f):
-                v = (row.get('src_version_id') or '').strip()
-                if v:
-                    try:
-                        used.add(int(v))
-                    except ValueError:
-                        pass
-    except Exception as e:
-        log(f'WARNING: could not read phase3 lineage ledger: {e}')
+
+    # 1. Authoritative: the phase3 stage record in pipeline_state.json
+    st = state if state is not None else (load_state() if os.path.exists(STATE) else {})
+    for rec in (st.get('phase3') or {}).values():
+        v = rec.get('src_version_id')
+        try:
+            if v is not None and str(v).strip() != '':
+                used.add(int(v))
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Derived mirror: phase3_lineage.csv (covers any runs not in this state file)
+    if os.path.exists(LINEAGE_CSV):
+        try:
+            with open(LINEAGE_CSV, newline='', encoding='utf-8') as f:
+                for row in csv.DictReader(f):
+                    v = (row.get('src_version_id') or '').strip()
+                    if v:
+                        try:
+                            used.add(int(v))
+                        except ValueError:
+                            pass
+        except Exception as e:
+            log(f'WARNING: could not read phase3 lineage ledger: {e}')
     return used
 
 
@@ -288,22 +363,29 @@ def run_seed_gen(unit: dict, dry: bool = False) -> tuple[str, dict]:
 
 
 def stage1_seeds(state: dict, target_seeds: int, dry: bool = False) -> None:
-    """Generate cold-start seeds until the pool has at least target_seeds."""
-    log(f'=== STAGE 1: Seed generation (target pool size: {target_seeds}) ===')
+    """Generate cold-start seeds until at least target_seeds are UNUSED (un-harvested).
+
+    'Run N seeds' means N seeds available to harvest fresh — not N seeds total. A seed
+    already consumed by a prior harvest does not count toward the target, so we top up
+    the gap between target_seeds and the current unused count. Each new cold seed is
+    unused by definition, so the target is met by generating exactly the shortfall.
+    """
+    log(f'=== STAGE 1: Seed generation (target: {target_seeds} UNUSED seeds) ===')
     seeds_st = state['seeds']
-    pool_now = count_pool_seeds()
-    log(f'Pool currently has {pool_now} seeds; need {target_seeds}')
-    if pool_now >= target_seeds:
-        log(f'Pool already has {pool_now} >= {target_seeds} seeds; skipping seed generation')
+    pool_now    = count_pool_seeds()
+    unused_now  = len(unused_seeds(state))
+    log(f'Pool has {pool_now} seeds, {unused_now} of them UNUSED; need {target_seeds} unused')
+    if unused_now >= target_seeds:
+        log(f'Already have {unused_now} >= {target_seeds} unused seeds; skipping seed generation')
         return
 
-    needed = target_seeds - pool_now
-    log(f'Will generate ~{needed} new seeds (pool may grow by more if seeds land fast)')
+    needed = target_seeds - unused_now
+    log(f'Will generate ~{needed} new seeds (each new seed is unused; pool may grow by more)')
 
     run_idx    = max((int(k.split('-r')[1]) for k in seeds_st if '-r' in k), default=0)
     consecutive_failures = 0
 
-    while count_pool_seeds() < target_seeds:
+    while len(unused_seeds(state)) < target_seeds:
         run_idx += 1
         uid   = f'seed-gen-r{run_idx:04d}'
         if seeds_st.get(uid, {}).get('status') == 'DONE':
@@ -336,7 +418,8 @@ def stage1_seeds(state: dict, target_seeds: int, dry: bool = False) -> None:
             break
 
     final_count = count_pool_seeds()
-    log(f'Stage 1 complete. Pool has {final_count} seeds.')
+    final_unused = len(unused_seeds(state))
+    log(f'Stage 1 complete. Pool has {final_count} seeds ({final_unused} unused).')
 
 
 # --------------------------------------------------------------------------- Stage 2: harvest
@@ -348,15 +431,25 @@ def run_harvest_unit(unit: dict, dry: bool = False) -> tuple[str, dict]:
 
     env = dict(os.environ)
     env['PHASE3_SKIP']         = '1'
-    env['PHASE0_SEED_SELECT']  = 'roundrobin'
     env['SOLVE_TRAJECTORY_CSV'] = unit['traj']
+    # Drive seed selection from the driver so each unused seed is harvested EXACTLY once
+    # (no duplicates across runs). PHASE0_SEED_ID pins one specific pooled seed, overriding
+    # round-robin (CpSatSchedulerEngine.loadCachedFeasibleHints). The driver computes the
+    # unused-seed worklist (unused_seeds()); each unit carries its own 'pin_seed'. If a unit
+    # somehow has no pin (shouldn't happen), fall back to round-robin for fair coverage.
+    if unit.get('pin_seed'):
+        env['PHASE0_SEED_ID'] = unit['pin_seed']
+    else:
+        env['PHASE0_SEED_SELECT'] = 'roundrobin'
 
     cp = '<classpath>' if dry else sw.build_classpath()
     cmd = ['java', '-cp', cp, 'com.residency.tools.HeadlessSolveRunner', '2',
            *map(str, HARVEST_BUDGET)]
 
     if dry:
-        log(f'WOULD launch harvest {unit["uid"]} PHASE3_SKIP=1 roundrobin  > {unit["log"]}')
+        pin = unit.get('pin_seed')
+        sel = f'PHASE0_SEED_ID={pin[:8]}' if pin else 'roundrobin'
+        log(f'WOULD launch harvest {unit["uid"]} PHASE3_SKIP=1 {sel}  > {unit["log"]}')
         return 'DRY', {}
 
     logf = open(unit['log'], 'w')
@@ -407,16 +500,33 @@ def run_harvest_unit(unit: dict, dry: bool = False) -> tuple[str, dict]:
 
 
 def stage2_harvest(state: dict, harvest_count: int, dry: bool = False) -> None:
-    """Run harvest_count Phase-1/2 solves."""
-    log(f'=== STAGE 2: Phase-1/2 harvest (target: {harvest_count} valid runs) ===')
+    """Harvest up to harvest_count UNUSED seeds — each seed harvested EXACTLY once.
+
+    The driver pins each unit to one unused pool seed (PHASE0_SEED_ID) so no seed is ever
+    harvested twice, and a re-run picks up only seeds still un-harvested. The worklist is
+    the unused-seed set capped at harvest_count; if fewer unused seeds exist than requested
+    we harvest what's available (Stage 1 should have topped the pool up first).
+    """
+    log(f'=== STAGE 2: Phase-1/2 harvest (target: {harvest_count} unused seeds) ===')
     harvest_st = state['harvest']
     done_count = sum(1 for r in harvest_st.values() if r.get('status') == 'DONE')
-    log(f'Already have {done_count} valid harvest runs; need {harvest_count}')
+
+    # Seeds already harvested by THIS pipeline (recorded in state) — never re-issue them.
+    issued = {(r.get('seed_id') or '')[:8]
+              for r in harvest_st.values() if r.get('seed_id')}
+    worklist = [s for s in unused_seeds(state) if s[:8] not in issued][:harvest_count]
+    log(f'{len(worklist)} unused seed(s) to harvest this run '
+        f'(have {done_count} done; requested {harvest_count}; '
+        f'{len(unused_seeds(state))} unused in pool)')
+    if not worklist:
+        log('No unused seeds left to harvest — Stage 2 has nothing to do.')
+        log(f'Stage 2 complete. {done_count} valid harvest versions banked.')
+        return
 
     run_idx              = max((int(k.split('-r')[1]) for k in harvest_st if '-r' in k), default=0)
     consecutive_failures = 0
 
-    while done_count < harvest_count:
+    for pin_seed in worklist:
         run_idx += 1
         uid = f'harvest-r{run_idx:04d}'
         if harvest_st.get(uid, {}).get('status') == 'DONE':
@@ -424,15 +534,19 @@ def stage2_harvest(state: dict, harvest_count: int, dry: bool = False) -> None:
             continue
 
         unit = {
-            'uid':    uid,
-            'label':  f'pipeline-harvest-{uid}',
-            'run':    run_idx,
-            'budget': HARVEST_BUDGET,
-            'log':    os.path.join(RUNS_DIR, f'{uid}.log'),
-            'traj':   os.path.join(RUNS_DIR, f'{uid}.traj.csv'),
+            'uid':       uid,
+            'label':     f'pipeline-harvest-{uid}',
+            'run':       run_idx,
+            'budget':    HARVEST_BUDGET,
+            'pin_seed':  pin_seed,
+            'log':       os.path.join(RUNS_DIR, f'{uid}.log'),
+            'traj':      os.path.join(RUNS_DIR, f'{uid}.traj.csv'),
         }
-        log(f'--- harvest unit {uid} ({done_count}/{harvest_count} done) ---')
+        log(f'--- harvest unit {uid} seed={pin_seed[:8]} ({done_count}/{harvest_count} done) ---')
         status, scores = run_harvest_unit(unit, dry=dry)
+        # Always record the pinned seed so a failed unit's seed still counts as consumed
+        # (we attempted it) and is not re-issued; the engine echoes the same id on success.
+        scores.setdefault('seed_id', pin_seed)
         harvest_st[uid] = {'status': status, **scores}
         if not dry:
             save_state(state)
@@ -447,7 +561,7 @@ def stage2_harvest(state: dict, harvest_count: int, dry: bool = False) -> None:
                 raise sw.Halt(f'{consecutive_failures} consecutive harvest failures — stopping')
 
         if dry:
-            log(f'DRY: would keep harvesting until {harvest_count} valid runs; stopping after 1')
+            log(f'DRY: would harvest each of the {len(worklist)} unused seeds; stopping after 1')
             break
 
     log(f'Stage 2 complete. {done_count} valid harvest versions banked.')
@@ -539,11 +653,11 @@ def stage3_timefold(state: dict, top_k: int, p3_budget_s: int, dry: bool = False
 
     # Select candidates (may have been selected in a prior (resumed) run)
     if 'candidates' not in state:
-        already = consumed_source_versions()
+        already = consumed_source_versions(state)
         candidates = best_harvest_versions(top_k, exclude=already)
         if already:
             log(f'Excluding {len(already)} Phase-2 version(s) already optimized '
-                f'(per phase3_lineage.csv)')
+                f'(per pipeline_state.json + phase3_lineage.csv)')
         if not candidates:
             raise sw.Halt('Stage 3: no valid (un-optimized) Phase-2 harvest versions found. '
                           'Stage 2 must produce at least 1 valid run first, '
@@ -669,6 +783,45 @@ def write_phase3_lineage(uid: str, status: str, cand: dict, metrics: dict,
             metrics.get('vol', ''), metrics.get('hh', ''), metrics.get('soft', ''),
             metrics.get('delta_line', ''),
         ])
+
+
+def reconcile_lineage_csv(state: dict) -> None:
+    """Ensure phase3_lineage.csv contains a row for every completed phase3 unit in state.
+
+    The CSV is a derived export, but it can be deleted or drift out of sync (as happened
+    when a prior pipeline's 20 runs left it empty). consumed_source_versions() already
+    reads state as authoritative, so dedup is safe regardless — but we also backfill any
+    missing rows here so external tools (and the skill's inventory query) that read the
+    CSV stay consistent. Idempotent: only appends src_version_ids not already present.
+    """
+    p3 = {uid: r for uid, r in (state.get('phase3') or {}).items()
+          if r.get('status') == 'DONE' and r.get('src_version_id') not in (None, '')}
+    if not p3:
+        return
+    present: set[str] = set()
+    if os.path.exists(LINEAGE_CSV):
+        try:
+            with open(LINEAGE_CSV, newline='', encoding='utf-8') as f:
+                for row in csv.DictReader(f):
+                    v = (row.get('src_version_id') or '').strip()
+                    if v:
+                        present.add(v)
+        except Exception as e:
+            log(f'WARNING: could not read lineage CSV for reconcile: {e}')
+            return
+    missing = [(uid, r) for uid, r in p3.items() if str(r['src_version_id']) not in present]
+    if not missing:
+        return
+    harvest = state.get('harvest') or {}
+    src_by_seed = {(r.get('seed_id') or '')[:8]: r for r in harvest.values() if r.get('seed_id')}
+    ts = datetime.datetime.now().isoformat(timespec='seconds')
+    for uid, r in missing:
+        s = src_by_seed.get((r.get('seed_id') or '')[:8], {})
+        cand = {'seed_id': r.get('seed_id', ''), 'version_id': r['src_version_id'],
+                'fragile': s.get('fragile', ''), 'healthy': s.get('healthy', ''),
+                'volunteer': s.get('volunteer', ''), 'heavy_heavy': s.get('heavy_to_heavy', '')}
+        write_phase3_lineage(uid, 'DONE', cand, r, r.get('p3_budget_s', 600))
+    log(f'Reconciled phase3_lineage.csv: backfilled {len(missing)} missing row(s) from state.')
 
 
 def write_final_report(state: dict, args: argparse.Namespace) -> None:
@@ -818,6 +971,7 @@ def main() -> int:
         log(f'DRY RUN: seeds={args.seeds} harvest={args.harvest} '
             f'top_k={args.top_k} p3_budget={args.p3_budget}s')
         state = load_state()
+        reconcile_lineage_csv(state)
         if not args.skip_seeds:
             stage1_seeds(state, args.seeds, dry=True)
         if not args.skip_harvest:
@@ -836,6 +990,7 @@ def main() -> int:
         sw.preflight()
         sw.backup_master('pipeline-start')
         state = load_state()
+        reconcile_lineage_csv(state)
 
         log(f'Pipeline starting: seeds={args.seeds} harvest={args.harvest} '
             f'top_k={args.top_k} p3_budget={args.p3_budget}s')
