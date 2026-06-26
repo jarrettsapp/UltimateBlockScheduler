@@ -302,6 +302,24 @@ public class DatabaseManager {
                 nn_dist_at_insert INTEGER
             )""",
             "CREATE INDEX IF NOT EXISTS idx_seed_stats_lru ON phase0_seed_stats(year, times_started, last_used_at)",
+            // Per-seed feasible ASSIGNMENT storage — one row per seed, UNBOUNDED. This decouples the
+            // seed INVENTORY (how many distinct feasible starts exist; can grow without limit) from
+            // the warm-start REPLAY pool (the legacy capped blob phase0_feasible_pool_<year>, kept
+            // small so replay stays fast). Harvest pins PHASE0_SEED_ID=<seed> and loads that seed's
+            // assignment by key from HERE, so any seed is individually loadable no matter how many
+            // millions exist — not just the handful in the capped replay blob. assignment = the same
+            // ';'-joined var=val serialization the blob uses (serializeHints). seed_id is content-
+            // addressed SHA-256, so (seed_id, year) is a natural stable key. Additive; the legacy
+            // blob remains the replay source and is backfilled into this table on first load.
+            """
+            CREATE TABLE IF NOT EXISTS phase0_seed_assignments (
+                seed_id     TEXT NOT NULL,
+                year        INTEGER NOT NULL,
+                assignment  TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (seed_id, year)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_seed_assign_year ON phase0_seed_assignments(year)",
             // Additive columns for DBs created before these existed. CREATE TABLE IF NOT EXISTS won't
             // add them to an existing table, so ALTER here; a failure (column already present) is
             // swallowed by the runner below, making this idempotent.

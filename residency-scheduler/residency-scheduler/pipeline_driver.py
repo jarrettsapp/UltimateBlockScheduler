@@ -390,35 +390,24 @@ def stage1_seeds(state: dict, target_seeds: int, dry: bool = False) -> None:
         log(f'Already have {unused_now} >= {target_seeds} unused seeds; skipping seed generation')
         return
 
-    # The engine caps the cached pool at cache_pool_max() distinct seeds. Seeds already
-    # consumed by harvest occupy slots permanently, so the MOST unused seeds we can ever
-    # reach is (cache_max - consumed). Demanding more than that would loop forever (each
-    # seed-gen 'succeeds' but the engine refuses to bank past the cap, so unused never
-    # rises). Clamp the effective target to that achievable ceiling and warn.
-    cache_max = cache_pool_max()
-    consumed  = pool_now - unused_now
-    achievable = max(0, cache_max - consumed)
-    effective_target = min(target_seeds, achievable)
-    if effective_target < target_seeds:
-        log(f'WARNING: cache pool cap is {cache_max} and {consumed} slot(s) are already '
-            f'consumed by harvest, so at most {achievable} unused seeds are reachable. '
-            f'Clamping target {target_seeds} -> {effective_target}. (Raise PHASE0_CACHE_POOL_MAX '
-            f'or harvest+advance existing seeds to free the ceiling.)')
-    if unused_now >= effective_target:
-        log(f'Already have {unused_now} unused seeds (>= achievable {effective_target}); '
-            f'nothing to generate. Proceeding with what exists.')
-        return
-
+    # Seed INVENTORY is now unbounded (per-seed storage in phase0_seed_assignments — the engine
+    # banks every distinct feasible seed regardless of the small warm-start replay cap). So the
+    # target is taken at face value: generate until there are `target_seeds` unused seeds. The only
+    # remaining limit is the solver running out of GENUINELY NEW feasible assignments to find (true
+    # diversity saturation), which the no-progress guard below detects so we never spin forever.
+    effective_target = target_seeds
     needed = effective_target - unused_now
-    log(f'Will generate ~{needed} new seed(s) toward {effective_target} unused.')
+    log(f'Will generate ~{needed} new seed(s) toward {effective_target} unused '
+        f'(inventory is unbounded; pool/replay cap no longer limits generation).')
 
     run_idx    = max((int(k.split('-r')[1]) for k in seeds_st if '-r' in k), default=0)
     consecutive_failures = 0
-    # No-progress guard: if seed-gen keeps completing but unused does not rise (pool full /
-    # only duplicate assignments found), stop after this many barren attempts instead of
-    # spinning forever. The user's earlier run did ~56 of these.
+    # No-progress guard: if seed-gen keeps completing but unused does not rise (the solver is only
+    # re-finding already-cached assignments — genuine diversity saturation), stop after this many
+    # barren attempts instead of spinning forever. With unbounded storage this now only triggers on
+    # REAL saturation, not the old cache-cap wall.
     no_progress = 0
-    NO_PROGRESS_LIMIT = 8
+    NO_PROGRESS_LIMIT = 12
 
     while len(unused_seeds(state)) < effective_target:
         prev_unused = len(unused_seeds(state))
@@ -460,10 +449,10 @@ def stage1_seeds(state: dict, target_seeds: int, dry: bool = False) -> None:
             no_progress += 1
             if no_progress >= NO_PROGRESS_LIMIT:
                 cur = len(unused_seeds(state))
-                log(f'WARNING: {no_progress} seed-gen attempts in a row produced no new unused '
-                    f'seed (pool stuck at {count_pool_seeds()}/{cache_max}). The solver is only '
-                    f'finding already-cached assignments. Stopping seed generation with {cur} '
-                    f'unused seed(s) and proceeding to harvest those.')
+                log(f'WARNING: {no_progress} seed-gen attempts in a row produced no new unused seed '
+                    f'(pool at {count_pool_seeds()}; only re-finding already-cached assignments — '
+                    f'genuine diversity saturation). Stopping seed generation with {cur} unused '
+                    f'seed(s) and proceeding to harvest those.')
                 break
 
     final_count = count_pool_seeds()

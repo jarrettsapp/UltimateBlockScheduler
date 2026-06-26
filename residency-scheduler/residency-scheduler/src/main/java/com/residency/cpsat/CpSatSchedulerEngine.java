@@ -138,6 +138,7 @@ public class CpSatSchedulerEngine {
     private final RotationLinkRuleDAO    linkRuleDAO;
     private final AuxFillerRotationDAO   auxFillerRotationDAO;
     private final Phase0SeedStatsDAO     seedStatsDAO;
+    private final Phase0SeedAssignmentDAO seedAssignmentDAO;
     private final Phase0CollectionRunsDAO collectionRunsDAO;
 
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
@@ -157,6 +158,7 @@ public class CpSatSchedulerEngine {
         linkRuleDAO          = new RotationLinkRuleDAO();
         auxFillerRotationDAO = new AuxFillerRotationDAO();
         seedStatsDAO         = new Phase0SeedStatsDAO();
+        seedAssignmentDAO    = new Phase0SeedAssignmentDAO();
         collectionRunsDAO    = new Phase0CollectionRunsDAO();
     }
 
@@ -1634,7 +1636,9 @@ public class CpSatSchedulerEngine {
         catch (NumberFormatException e) { return CACHE_POOL_MAX_DEFAULT; }
     }
 
-    /** Loads the cached feasible-assignment pool for {@code year} (may be empty). */
+    /** Loads the cached feasible-assignment REPLAY pool for {@code year} (the small capped blob; may
+     *  be empty). On first load it lazily backfills the legacy blob into the new unbounded per-seed
+     *  store so existing pools (built before per-seed storage) become loadable by id without a wipe. */
     private List<Map<String, Long>> loadCachedFeasiblePool(int year) {
         try {
             String blob = configDAO.loadRawValue(CACHE_KEY_PREFIX + year);
@@ -1643,10 +1647,28 @@ public class CpSatSchedulerEngine {
             for (String rec : blob.split(CACHE_REC_SEP)) {
                 if (!rec.isBlank()) pool.add(deserializeHints(rec));
             }
+            backfillSeedAssignments(year, pool);
             return pool;
         } catch (SQLException e) {
             LOG.log(java.util.logging.Level.WARNING, "Phase-0 cache load failed", e);
             return new ArrayList<>();
+        }
+    }
+
+    /** One-time migration: if the per-seed assignment store is empty for the year but the legacy
+     *  replay blob holds seeds, copy each blob assignment into phase0_seed_assignments so prior
+     *  pools are harvestable by id. save() is idempotent, so this is safe to call on every load;
+     *  the empty-store guard keeps it a no-op once done. Never wipes anything. */
+    private void backfillSeedAssignments(int year, List<Map<String, Long>> pool) {
+        if (pool.isEmpty()) return;
+        try {
+            if (seedAssignmentDAO.count(year) > 0) return;   // already migrated
+            for (Map<String, Long> a : pool) {
+                seedAssignmentDAO.save(seedId(a), year, serializeHints(a));
+            }
+            LOG.info("Backfilled " + pool.size() + " legacy pool seed(s) into phase0_seed_assignments for year " + year);
+        } catch (SQLException e) {
+            LOG.log(java.util.logging.Level.WARNING, "per-seed assignment backfill failed", e);
         }
     }
 
@@ -1672,10 +1694,19 @@ public class CpSatSchedulerEngine {
         // the normal selection rather than silently solving the wrong seed.
         String pinId = System.getenv().getOrDefault("PHASE0_SEED_ID", "").trim().toLowerCase();
         if (!pinId.isEmpty()) {
+            // First check the small replay pool (covers seeds still in the capped blob), then fall
+            // back to the UNBOUNDED per-seed store so ANY inventoried seed is loadable by id — this
+            // is what lets harvest pin any of a million seeds, not just the handful in the replay set.
             for (Map<String, Long> a : pool) {
                 if (seedId(a).startsWith(pinId)) return a;
             }
-            LOG.warning("PHASE0_SEED_ID=" + pinId + " matched no pooled seed — using normal selection.");
+            try {
+                String stored = seedAssignmentDAO.load(pinId, year);
+                if (stored != null && !stored.isBlank()) return deserializeHints(stored);
+            } catch (SQLException e) {
+                LOG.log(java.util.logging.Level.WARNING, "per-seed assignment load failed for " + pinId, e);
+            }
+            LOG.warning("PHASE0_SEED_ID=" + pinId + " matched no inventoried seed — using normal selection.");
         }
         String mode = System.getenv().getOrDefault("PHASE0_SEED_SELECT", "random").trim().toLowerCase();
         if (mode.equals("roundrobin")) {
@@ -1719,12 +1750,6 @@ public class CpSatSchedulerEngine {
                     return; // already have this one
                 }
             }
-            if (pool.size() >= cachePoolMax()) {
-                solverLog.append(String.format(
-                    "Phase 0 FIX=cache: pool full (%d/%d) — keeping existing variety, not adding.\n",
-                    pool.size(), cachePoolMax()));
-                return;
-            }
             // Saturation monitor: distance from this NEW seed to its closest existing pool member,
             // computed BEFORE adding it (so `pool` here excludes `found`). Exact-dedup re-discovery
             // (delta=0) is a near-useless saturation signal at ~900 placements; a shrinking
@@ -1735,6 +1760,25 @@ public class CpSatSchedulerEngine {
                 int d = hammingPlacements(found, existing);
                 nnDist = (nnDist < 0) ? d : Math.min(nnDist, d);
             }
+            String sid = seedId(found);
+            // (1) UNBOUNDED inventory: always store this seed's assignment per-seed and register it
+            //     in phase0_seed_stats, regardless of the replay-pool cap. This is what makes "generate
+            //     as many seeds as you want" work — the cap below only bounds the warm-start REPLAY
+            //     blob, never the inventory. Harvest loads any seed by id from phase0_seed_assignments.
+            try { seedAssignmentDAO.save(sid, year, serializeHints(found)); }
+            catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "seed-assignment store failed", e); }
+            try { seedStatsDAO.ensureSeed(sid, year, nnDist); }
+            catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "seed-stats register failed", e); }
+
+            // (2) BOUNDED replay blob: only append to the legacy warm-start pool while it is under the
+            //     cap, so deserializing it on every solve stays cheap. Past the cap the seed is still
+            //     fully inventoried above; it just doesn't enter the small replay set.
+            if (pool.size() >= cachePoolMax()) {
+                solverLog.append(String.format(
+                    "Phase 0 FIX=cache: replay pool full (%d/%d) — seed %s inventoried but not added to replay set.\n",
+                    pool.size(), cachePoolMax(), sid.substring(0, 8)));
+                return;
+            }
             pool.add(found);
             StringBuilder blob = new StringBuilder();
             for (int i = 0; i < pool.size(); i++) {
@@ -1742,13 +1786,8 @@ public class CpSatSchedulerEngine {
                 blob.append(serializeHints(pool.get(i)));
             }
             configDAO.saveRawValue(CACHE_KEY_PREFIX + year, blob.toString());
-            // Register the new seed for per-seed tracking (coverage-first selection + reward
-            // accumulation) with its nearest-neighbor distance. Keyed by content hash so it's
-            // stable + dedup-consistent.
-            try { seedStatsDAO.ensureSeed(seedId(found), year, nnDist); }
-            catch (SQLException e) { LOG.log(java.util.logging.Level.WARNING, "seed-stats register failed", e); }
             solverLog.append(String.format(
-                "Phase 0 FIX=cache: cached new feasible assignment (pool now %d/%d).\n",
+                "Phase 0 FIX=cache: cached new feasible assignment (replay pool now %d/%d; inventory unbounded).\n",
                 pool.size(), cachePoolMax()));
         } catch (SQLException e) {
             LOG.log(java.util.logging.Level.WARNING, "Phase-0 cache save failed", e);
