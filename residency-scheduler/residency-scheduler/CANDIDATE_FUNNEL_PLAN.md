@@ -487,3 +487,70 @@ The defensible claim at current state:
 
 A fully defensible stopping claim requires Experiments A–D above to be completed and to show
 diminishing returns across all soft dimensions.
+
+---
+
+## 12. Findings (2026-06-27) — measured by `evaluate_pipeline_data.py`
+
+The evaluation tooling is built (`evaluate_pipeline_data.py`, read-only). Run it after the pipeline;
+it reports all sections below + a verdict. Results on the current data:
+
+### Best corner and convergence
+- **Best Phase-3 corner: fragile=0, volunteer=3, healthy=22 (tier3=65).**
+- **OBJECTIVE-LIMITED:** reached independently by **3 distinct seeds**, **28 runs** since the last
+  improvement → rule-of-three 95% UB on P(a new run beats it) = **≤0.107**. More seed generation /
+  harvest will keep re-hitting this corner, NOT exceed it. (Convergence module.)
+
+### P2→P3 predictivity
+- Starting Phase-2 soft score does **not** predict the Phase-3 final (Spearman −0.16); the final is
+  near-constant (only fragile ∈ {0,3}). The floor is seed-independent.
+- Seed structural distance does **not** track downstream quality (Spearman −0.02): structurally
+  diverse seeds, but diversity buys no downstream quality variance.
+
+### Fragile trade-off experiment (25 runs, `experiment_fragile_tradeoff.py`)
+- Lowered the fragile weight (TF_WF) across 5→1000 and ran an equal-weight (Wf=Wv=100) test.
+- **Healthy NEVER exceeded 22 at any weight.** Cheapening fragile only converts volunteer weekends
+  into (clinically worse) fragile ones; it does not create healthy weekends. Equal-weighting (the
+  one regime that could have escaped) hit exactly 22, never 23.
+- **Conclusion: healthy=22 is a CAPACITY ceiling, not a penalty artifact.** Keep the production
+  objective; the fragile trade is unfavorable. Raising healthy past 22 would require changing the
+  underlying coverage capacity (more eligible coverers / rotation structure), not solver tuning.
+- Experiment runs are tagged `frag-exp-*` in the DB and EXCLUDED from the production convergence
+  proof (verified: proof still reads 41 production runs).
+
+### Coverage depth (the live open question)
+- Two schedules at healthy=22 are NOT equally robust. A depth-2 weekend (exactly 2 coverers) is
+  "fragile-adjacent" — one lost coverer drops it to fragile. The best schedule (v72) has **17 of 22
+  healthy weekends at depth-2**, 5 at depth-3, mean depth 2.23, max 3.
+- The tiered objective **already rewards depth** (corr(tier3, depth-2 count) = 1.0) — depth is the
+  in-tier tiebreaker, and v72 is already the depth-winner.
+- **But only 3 runs sit at the f0/h22 corner — depth is barely sampled.** Unknown whether the
+  fragile-adjacent count (17) is a floor or just best-of-3. The depth module reports a best-so-far
+  convergence on depth-2 so the next batch will reveal improvable-vs-capacity-limited.
+
+---
+
+## 13. NEXT SESSION — handoff plan (P3 move sets + longer runs)
+
+The count ceiling (healthy=22) and the fragile trade are settled. The remaining lever for a better
+*true optimum* is **Phase-3 search power and depth**, not seeds/harvest. Plan for next session:
+
+1. **P3 move-set changes — mirror Scheduler 5.0 sequential move-set transitions.** The current R0
+   move set (change + swap) may be under-powered for deepening coverage. Port the sequential
+   move-set transition approach from the Scheduler 5.0 project (custom move factories already exist
+   in `solver/move/`: `SundayEjectionChainMoveFactory`, `SundaySwapMoveFactory` — R1–R4 variants
+   built but OFF, see TIMEFOLD_OPTIMIZATION_HANDOFF.md). Goal: feasibility-preserving neighborhood
+   moves that can trade coverers between weekends to deepen depth-2 weekends.
+2. **Longer P3 budget.** Current budget shows ~18% of starts still improving in the last 10% of
+   1000s (time-to-best module) → budget is slightly short. Raise it so late improvements aren't cut.
+3. **Longer runs to find the true optimum.** Populate the f0/h22 corner with many more Phase-3 runs
+   at the production objective, then re-run `evaluate_pipeline_data.py` and read the **coverage-depth
+   convergence**: if depth-2 count keeps dropping below 17 → depth is improvable (keep running); if
+   it plateaus → depth is capacity-limited and the only lever is raising the depth reward
+   (`TF_RDEPTH`/`TF_RBASE`, currently bounded small).
+4. **Re-enable trajectory logging** (`SOLVE_TRAJECTORY_CSV`) so the Phase-3 plateau module can
+   compute a real no-improvement stop time instead of falling back to time-to-best.
+
+The evaluation loop is: run more Phase-3 → `python evaluate_pipeline_data.py` → read the convergence
++ coverage-depth verdicts → decide stop vs continue vs tune. The `/evaluate-pipeline-data` skill
+(Opus-only) wraps this with full interpretation.
