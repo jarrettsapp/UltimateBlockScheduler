@@ -636,6 +636,7 @@ public class TimefoldSchedulerService {
         public RotationSchedule solution;
         public long timeToBestMs;   // ms-spent at the LAST best-solution-changed event
         public long totalMs;        // wall-clock of the whole solve
+        public long seed;           // this start's random seed (for attribution)
     }
 
     /**
@@ -658,6 +659,18 @@ public class TimefoldSchedulerService {
         return r;
     }
 
+    /** Per-start diagnostics for the time-cap analysis: when this start last improved, its final
+     *  soft cost, and how long it ran. One per parallel start, so the FULL distribution of
+     *  time-to-best (not just the winner's) is recoverable for sizing the budget. */
+    public static class StartTrace {
+        public int startIndex;
+        public long seed;
+        public long timeToBestMs;   // ms-spent at this start's LAST best-solution-changed event
+        public long totalMs;        // wall time this start ran (≈ budget)
+        public int softCost;        // final soft penalty (-softScore); lower is better
+        public boolean feasible;    // hard==0 && medium==0
+    }
+
     /** Result of a multi-start solve: best solution of N parallel starts + per-start diagnostics. */
     public static class MultiStartResult {
         public RotationSchedule best;
@@ -665,6 +678,9 @@ public class TimefoldSchedulerService {
         public long totalWallMs;          // wall-clock of the whole parallel batch
         public int starts;
         public int winningStartIndex;
+        /** Every start's trace, in start order. Empty only if something went wrong. The data the
+         *  time-cap math consumes: across all starts, when was each one's eventual best found? */
+        public java.util.List<StartTrace> traces = new ArrayList<>();
     }
 
     /**
@@ -694,6 +710,7 @@ public class TimefoldSchedulerService {
                 ts.solution = solved;
                 ts.timeToBestMs = lastBestMs[0];
                 ts.totalMs = System.currentTimeMillis() - t0;
+                ts.seed = seed;
                 return ts;
             }));
         }
@@ -703,6 +720,17 @@ public class TimefoldSchedulerService {
         r.starts = starts;
         for (int i = 0; i < futures.size(); i++) {
             TimedSolve ts = futures.get(i).get();
+            // Capture EVERY start's trace so the time-cap analysis sees the full distribution,
+            // not just the winner. softScore is ≤0; store the positive cost (lower = better).
+            HardMediumSoftScore sc = ts.solution.getScore();
+            StartTrace tr = new StartTrace();
+            tr.startIndex = i;
+            tr.seed = ts.seed;
+            tr.timeToBestMs = ts.timeToBestMs;
+            tr.totalMs = ts.totalMs;
+            tr.softCost = (int) -sc.softScore();
+            tr.feasible = sc.hardScore() == 0 && sc.mediumScore() == 0;
+            r.traces.add(tr);
             // Higher (less negative) score wins; ties broken by earlier time-to-best.
             if (r.best == null
                     || ts.solution.getScore().compareTo(r.best.getScore()) > 0) {

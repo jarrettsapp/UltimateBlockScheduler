@@ -627,8 +627,13 @@ def run_timefold(unit: dict, dry: bool = False) -> tuple[str, dict]:
             f'budget={unit["p3_budget_s"]}s  > {unit["log"]}')
         return 'DRY', {}
 
+    # Accumulate per-start time-to-best rows into ONE cumulative CSV across the whole pipeline
+    # (one row per parallel start, every Timefold run appends). This is the dataset the time-cap
+    # analysis consumes — over an extensive run it builds the full time-to-best distribution.
+    env = dict(os.environ)
+    env['TF_TRAJECTORY_CSV'] = os.path.join(ROOT, 'tf_time_to_best.csv')
     logf = open(unit['log'], 'w')
-    p = subprocess.Popen(cmd, cwd=ROOT, stdout=logf, stderr=subprocess.STDOUT)
+    p = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT)
     log(f'Timefold {unit["uid"]} PID {p.pid} version={unit["version_id"]} '
         f'budget={unit["p3_budget_s"]}s -> {os.path.basename(unit["log"])}')
 

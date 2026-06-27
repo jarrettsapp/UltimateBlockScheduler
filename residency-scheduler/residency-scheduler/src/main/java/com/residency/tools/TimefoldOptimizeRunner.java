@@ -55,6 +55,13 @@ public final class TimefoldOptimizeRunner {
         long ms = System.currentTimeMillis() - t0;
         System.out.printf("multi-start: winner=#%d, best@%.0fs of %.0fs wall%n",
             multi.winningStartIndex, multi.bestTimeToBestMs / 1000.0, multi.totalWallMs / 1000.0);
+
+        // TIME-TO-BEST CAPTURE for the budget analysis: append one row per parallel start to a
+        // cumulative CSV (TF_TRAJECTORY_CSV env, default tf_time_to_best.csv). Records when each
+        // start's eventual best was found vs the budget, so an extensive run yields the full
+        // distribution to size the time cap mathematically. Off the critical path; failures are
+        // non-fatal. WINNER flag marks the start whose solution was committed.
+        recordTimeToBest(year, srcVersion, spent, starts, multi);
         HardMediumSoftScore score = solved.getScore();
         CoverageMetrics after = svc.computeMetrics(solved);
         System.out.printf("AFTER  (%.0fs): score=%s%n", ms / 1000.0, score);
@@ -135,6 +142,38 @@ public final class TimefoldOptimizeRunner {
         met.t3SundayShortfall = m.shortfallUnits;
         dao.insertMetrics(runId, met);
         dao.insertWeekendVector(runId, m.perWeekend);
+    }
+
+    /**
+     * Append one row PER START to the cumulative time-to-best CSV for the budget analysis. Columns:
+     * run_at, year, src_version, budget_s, starts, start_index, seed, time_to_best_s, total_s,
+     * soft_cost, feasible, winner. Idempotent header. Path = TF_TRAJECTORY_CSV env or
+     * tf_time_to_best.csv in the working dir. Never throws into the solve path.
+     */
+    private static void recordTimeToBest(int year, int srcVersion, int budgetS, int starts,
+                                         TimefoldSchedulerService.MultiStartResult multi) {
+        String path = System.getenv("TF_TRAJECTORY_CSV");
+        if (path == null || path.isBlank()) path = "tf_time_to_best.csv";
+        try {
+            java.io.File f = new java.io.File(path);
+            boolean newFile = !f.exists() || f.length() == 0;
+            try (java.io.FileWriter w = new java.io.FileWriter(f, true)) {
+                if (newFile) {
+                    w.write("run_at,year,src_version,budget_s,starts,start_index,seed,"
+                          + "time_to_best_s,total_s,soft_cost,feasible,winner\n");
+                }
+                String runAt = java.time.Instant.now().toString();
+                for (TimefoldSchedulerService.StartTrace t : multi.traces) {
+                    w.write(String.format("%s,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%d,%d,%d%n",
+                        runAt, year, srcVersion, budgetS, starts, t.startIndex, t.seed,
+                        t.timeToBestMs / 1000.0, t.totalMs / 1000.0, t.softCost,
+                        t.feasible ? 1 : 0, t.startIndex == multi.winningStartIndex ? 1 : 0));
+                }
+            }
+            System.out.printf("recorded %d time-to-best row(s) -> %s%n", multi.traces.size(), path);
+        } catch (Exception e) {
+            System.out.println("time-to-best CSV write failed (non-fatal): " + e.getMessage());
+        }
     }
 
     private static int envInt(String key, int dflt) {
